@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom'; 
+import React, { useState, useEffect } from 'react'; 
 
 // 科別選項
 const departments = [
@@ -19,7 +18,10 @@ const departments = [
 function Dashboard() {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
 
   const loadEmployees = async () => {
     setLoading(true);
@@ -45,6 +47,19 @@ function Dashboard() {
   useEffect(() => {
     loadEmployees();
   }, []);
+
+  // 篩選員工列表
+  const filteredEmployees = employees.filter(employee => {
+    const matchesSearch = employee.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         employee.employee_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         employee.email.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const matchesStatus = statusFilter === '' || employee.status === statusFilter;
+    const matchesDepartment = departmentFilter === '' || employee.department_code === departmentFilter;
+    const matchesRole = roleFilter === '' || employee.role === roleFilter;
+    
+    return matchesSearch && matchesStatus && matchesDepartment && matchesRole;
+  });
   
   const getDepartmentName = (code) => {
     const dept = departments.find(d => d.code === code);
@@ -60,7 +75,7 @@ function Dashboard() {
     const statusInfo = statusMap[status] || statusMap.pending;
     
     return (
-      <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusInfo.color}`}>
+      <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${statusInfo.color}`}>
         {statusInfo.text}
       </span>
     );
@@ -117,7 +132,15 @@ function Dashboard() {
   };
 
   const handleAddEmployee = () => {
-    navigate('/admin/add');
+    alert('導航到新增員工頁面 (功能開發中)');
+  };
+
+  // 清除所有篩選
+  const clearAllFilters = () => {
+    setSearchTerm('');
+    setStatusFilter('');
+    setDepartmentFilter('');
+    setRoleFilter('');
   };
 
   return (
@@ -127,7 +150,7 @@ function Dashboard() {
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <div className="flex justify-between items-center">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">員工管理</h1>
+              <h1 className="text-3xl font-bold text-gray-900 text-left">員工管理</h1>
               <p className="text-gray-600 mt-2">手術排程系統員工管理後台</p>
             </div>
             <button
@@ -210,33 +233,81 @@ function Dashboard() {
         {/* 員工列表 */}
         <div className="bg-white rounded-lg shadow-sm">
           <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center mb-4">
               <div>
-                <h2 className="text-xl font-semibold text-gray-900">員工列表</h2>
+                <h2 className="text-xl font-semibold text-gray-900 text-left">員工列表</h2>
                 <p className="text-sm text-gray-600 mt-1">管理所有員工的基本資料和權限設定</p>
               </div>
-              
-              {/* 搜尋和篩選 */}
-              <div className="flex space-x-3">
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="搜尋員工..."
-                    className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
-                  />
-                  <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                </div>
-                
-                <select className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                  <option value="">所有狀態</option>
-                  <option value="active">已啟用</option>
-                  <option value="pending">待註冊</option>
-                  <option value="inactive">已停用</option>
-                </select>
-              </div>
             </div>
+            
+            {/* 搜尋和篩選區域 */}
+            <div className="grid grid-cols-1 grid-cols-5 gap-4">
+              {/* 搜尋框 */}
+              <div className="relative lg:col-span-2">
+                <input
+                  type="text"
+                  placeholder="搜尋姓名、員工編號或信箱..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+              
+              
+
+              {/* 科別篩選 */}
+              <select 
+                value={departmentFilter}
+                onChange={(e) => setDepartmentFilter(e.target.value)}
+                className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">所有科別</option>
+                {departments.map(dept => (
+                  <option key={dept.code} value={dept.code}>{dept.name}</option>
+                ))}
+              </select>
+
+              {/* 角色篩選 */}
+              <select 
+                value={roleFilter}
+                onChange={(e) => setRoleFilter(e.target.value)}
+                className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">所有職位</option>
+                <option value="D">醫師</option>
+                <option value="N">護理人員</option>
+              </select>
+
+              {/* 狀態篩選 */}
+              <select 
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">所有狀態</option>
+                <option value="active">已啟用</option>
+                <option value="pending">待註冊</option>
+                <option value="inactive">已停用</option>
+              </select>
+            </div>
+
+            {/* 篩選結果和清除按鈕 */}
+            {(searchTerm || statusFilter || departmentFilter || roleFilter) && (
+              <div className="mt-4 flex items-center justify-between">
+                <div className="text-sm text-gray-600">
+                  顯示 {filteredEmployees.length} 筆結果，共 {employees.length} 筆員工資料
+                </div>
+                <button
+                  onClick={clearAllFilters}
+                  className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                >
+                  清除所有篩選
+                </button>
+              </div>
+            )}
           </div>
 
           {loading ? (
@@ -244,65 +315,97 @@ function Dashboard() {
               <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
               <p className="mt-4 text-gray-600">載入員工資料中...</p>
             </div>
-          ) : employees.length === 0 ? (
+          ) : filteredEmployees.length === 0 ? (
             <div className="p-12 text-center">
               <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
               </svg>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">尚無員工資料</h3>
-              <p className="text-gray-600 mb-6">開始新增第一位員工來建立您的團隊</p>
-              <button
-                onClick={handleAddEmployee}
-                className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                新增第一位員工
-              </button>
+              <h3 className="text-lg font-medium text-gray-900 mb-2">
+                {employees.length === 0 ? '尚無員工資料' : '找不到符合條件的員工'}
+              </h3>
+              <p className="text-gray-600 mb-6">
+                {employees.length === 0 
+                  ? '開始新增第一位員工來建立您的團隊' 
+                  : '試著調整搜尋條件或清除篩選'}
+              </p>
+              {employees.length === 0 && (
+                <button
+                  onClick={handleAddEmployee}
+                  className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  新增第一位員工
+                </button>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-10">
                       員工資訊
                     </th>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      科別/角色
+                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-64">
+                      電子信箱
                     </th>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">
+                      科別
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">
+                      角色
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">
                       權限
                     </th>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">
                       狀態
                     </th>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">
                       操作
                     </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {employees.map((employee) => (
+                  {filteredEmployees.map((employee) => (
                     <tr key={employee.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-6 py-4">
                         <div className="flex items-center">
-                          <div className="flex-shrink-0 h-10 w-10">
-                            <div className="h-10 w-10 rounded-full bg-gradient-to-r from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold">
+                          <div className="flex-shrink-0 h-12 w-12">
+                            <div className="h-12 w-12 rounded-full bg-gradient-to-r from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-lg">
                               {employee.name.charAt(0)}
                             </div>
                           </div>
                           <div className="ml-4">
-                            <div className="text-sm font-medium text-gray-900">{employee.name}</div>
-                            <div className="text-sm text-gray-500">{employee.employee_id}</div>
-                            <div className="text-sm text-gray-500">{employee.email}</div>
+                            <div className="text-base font-semibold text-gray-900 w-24">{employee.name}</div>
+                            <div className="text-sm font-mono text-gray-600 mt-1">{employee.employee_id}</div>
                           </div>
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{getDepartmentName(employee.department_code)}</div>
-                        <div className="text-sm text-gray-500">{getRoleText(employee.role)}</div>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm text-gray-900">{employee.email}</span>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(employee.email);
+                            }}
+                            className="text-gray-400 hover:text-gray-600 transition-colors p-1"
+                            title="複製信箱"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                            </svg>
+                          </button>
+                        </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                      <td className="px-6 py-4 text-left">
+                        <div className="text-sm font-medium text-gray-900">{getDepartmentName(employee.department_code)} ({employee.department_code})</div>
+                        <div className="text-xs text-gray-500 mt-1"></div>
+                      </td>
+                      <td className="px-6 py-4 text-left">
+                        <div className="text-sm text-gray-900">{getRoleText(employee.role)}</div>
+                      </td>
+                      <td className="px-6 py-4 text-left">
+                        <span className={`inline-flex px-3 py-1 text-xs font-medium rounded-full ${
                           employee.permission === '1' 
                             ? 'bg-green-100 text-green-800' 
                             : 'bg-gray-100 text-gray-800'
@@ -310,13 +413,13 @@ function Dashboard() {
                           {getPermissionText(employee.permission)}
                         </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-6 py-4 text-left">
                         {getStatusBadge(employee.status)}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <div className="flex space-x-3">
+                      <td className="px-6 py-4 text-left">
+                        <div className="flex space-x-2">
                           <button 
-                            className="text-blue-600 hover:text-blue-900 transition-colors"
+                            className="text-blue-600 hover:text-blue-900 transition-colors p-1"
                             onClick={() => handleEdit(employee.id)}
                             title="編輯員工"
                           >
@@ -327,7 +430,7 @@ function Dashboard() {
                           
                           {employee.status === 'pending' && (
                             <button 
-                              className="text-green-600 hover:text-green-900 transition-colors"
+                              className="text-green-600 hover:text-green-900 transition-colors p-1"
                               onClick={() => handleResendInvite(employee.id)}
                               title="重發邀請"
                             >
@@ -338,7 +441,7 @@ function Dashboard() {
                           )}
                           
                           <button 
-                            className="text-red-600 hover:text-red-900 transition-colors"
+                            className="text-red-600 hover:text-red-900 transition-colors p-1"
                             onClick={() => handleDelete(employee.id)}
                             title={employee.status === 'active' ? '停用員工' : '刪除員工'}
                           >

@@ -136,33 +136,33 @@ function AddEmployeePage({ onBack, onSuccess }) {
 
         <div className="p-6">
           <div className="space-y-4">
-            <div className="flex justify-between">
-              <span className="text-gray-600">姓名：</span>
+            <div className="flex">
+              <span className="text-gray-600 w-24 text-left">姓名：</span>
               <span className="font-medium">{formData.name}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">電子信箱：</span>
+            <div className="flex">
+              <span className="text-gray-600 w-24 text-left">電子信箱：</span>
               <span className="font-medium">{formData.email}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">科別：</span>
+            <div className="flex">
+              <span className="text-gray-600 w-24 text-left">科別：</span>
               <span className="font-medium">
                 {departments.find(d => d.code === formData.department_code)?.name}
               </span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">角色：</span>
+            <div className="flex">
+              <span className="text-gray-600 w-24 text-left">職位：</span>
               <span className="font-medium">{formData.role === 'D' ? '醫師' : '護理人員'}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">系統權限：</span>
+            <div className="flex">
+              <span className="text-gray-600 w-24 text-left">系統權限：</span>
               <span className="font-medium">
                 {formData.permission === '1' ? '可修改手術排程' : '僅可查看手術排程'}
               </span>
             </div>
-            <div className="flex justify-between border-t pt-4">
-              <span className="text-gray-600">員工編號：</span>
-              <span className="font-mono font-bold text-blue-600">{preview}</span>
+            <div className="flex border-t pt-4">
+              <span className="text-gray-600 w-24 text-left">員工編號：</span>
+              <span className="font-mono font-bold text-blue-600 text-left">{preview}</span>
             </div>
           </div>
 
@@ -172,9 +172,12 @@ function AddEmployeePage({ onBack, onSuccess }) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
               </svg>
               <div>
-                <h4 className="font-medium text-yellow-800">重要提醒</h4>
-                <p className="text-sm text-yellow-700 mt-1">
-                  確認新增後，系統將自動發送註冊邀請信件至指定信箱，員工需完成 FIDO 註冊後方可使用系統。
+                <h4 className="font-medium text-yellow-800 text-left">重要提醒</h4>
+                <p className="text-sm text-yellow-700 mt-1 text-left">
+                  確認新增後，系統將自動發送註冊邀請信件至指定信箱，
+                </p>
+                <p className="text-sm text-yellow-700 mt-1 text-left">
+                  員工需完成 FIDO 註冊後方可使用系統。
                 </p>
               </div>
             </div>
@@ -206,7 +209,7 @@ function AddEmployeePage({ onBack, onSuccess }) {
 
   return (
     <div className="min-h-screen w-full bg-gray-50">
-      <div className="max-w-4xl mx-auto p-6">
+      <div className="max-w-7xl mx-auto p-6">
         {/* 頂部導航 */}
         <div className="flex items-center mb-8">
           <button
@@ -225,193 +228,240 @@ function AddEmployeePage({ onBack, onSuccess }) {
           <div className="p-8">
             <h1 className="text-3xl font-bold text-center text-gray-900 mb-8">新增員工</h1>
             
-            <div className="max-w-3xl mx-auto space-y-8">
-              {/* 基本資料區塊 */}
-              <div className="border rounded-lg p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
-                  <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center mr-3 text-sm font-bold">1</div>
-                  基本資料
-                </h2>
-                
-                <div className="grid md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      姓名 *
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.name}
-                      onChange={(e) => handleChange('name', e.target.value)}
-                      className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                        errors.name ? 'border-red-500' : 'border-gray-300'
-                      }`}
-                      placeholder="請輸入完整姓名"
-                    />
-                    {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      電子信箱 *
-                    </label>
-                    <input
-                      type="email"
-                      value={formData.email}
-                      onChange={(e) => handleChange('email', e.target.value)}
-                      className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                        errors.email ? 'border-red-500' : 'border-gray-300'
-                      }`}
-                      placeholder="example@hospital.com"
-                    />
-                    {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email}</p>}
-                  </div>
-                </div>
-              </div>
-
-              {/* 部門設定區塊 */}
-              <div className="border rounded-lg p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
-                  <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center mr-3 text-sm font-bold">2</div>
-                  部門設定
-                </h2>
-                
-                <div className="grid md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      科別 *
-                    </label>
-                    <select
-                      value={formData.department_code}
-                      onChange={(e) => handleChange('department_code', e.target.value)}
-                      className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                        errors.department_code ? 'border-red-500' : 'border-gray-300'
-                      }`}
-                    >
-                      <option value="">請選擇科別</option>
-                      {departments.map(dept => (
-                        <option key={dept.code} value={dept.code}>
-                          {dept.name} ({dept.code})
-                        </option>
-                      ))}
-                    </select>
-                    {errors.department_code && <p className="text-red-500 text-sm mt-1">{errors.department_code}</p>}
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      角色 *
-                    </label>
-                    <select
-                      value={formData.role}
-                      onChange={(e) => handleChange('role', e.target.value)}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="D">醫師</option>
-                      <option value="N">護理人員</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* 員工編號預覽 */}
-                {preview && (
-                  <div className="mt-6 bg-green-50 p-4 rounded-lg border border-green-200">
-                    <div className="flex items-center mb-2">
-                      <svg className="w-5 h-5 text-green-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <span className="font-medium text-green-900">預覽員工編號</span>
-                    </div>
-                    <div className="text-xl font-mono font-bold text-green-700 bg-white px-3 py-2 rounded border">
-                      {preview}
-                    </div>
-                    <p className="text-sm text-green-600 mt-2">
-                      格式：{formData.role === 'D' ? '醫師' : '護理人員'} + {formData.department_code} + 權限等級 + 流水號
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {/* 權限設定區塊 */}
-              <div className="border rounded-lg p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
-                  <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center mr-3 text-sm font-bold">3</div>
-                  權限設定
-                </h2>
-                
-                <div className="space-y-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-3">
-                    系統權限 *
-                  </label>
+            {/* 三欄式佈局 */}
+            <div className="grid grid-cols-3 gap-8 items-stretch">
+              {/* 左欄 */}
+              <div className="space-y-6">
+                {/* 基本資料區塊 */}
+                <div className="border rounded-lg p-6 min-h-[320px]">
+                  <h2 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                    <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center mr-3 text-sm font-bold">1</div>
+                    基本資料
+                  </h2>
                   
-                  <div className="space-y-3">
-                    <label className="flex items-start p-4 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <div className="space-y-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2 text-left">
+                        姓名 <span className="text-red-500">*</span>
+                      </label>
                       <input
-                        type="radio"
-                        name="permission"
-                        value="1"
-                        checked={formData.permission === '1'}
-                        onChange={(e) => handleChange('permission', e.target.value)}
-                        className="mt-1 mr-4"
+                        type="text"
+                        value={formData.name}
+                        onChange={(e) => handleChange('name', e.target.value)}
+                        className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          errors.name ? 'border-red-500' : 'border-gray-300'
+                        }`}
+                        placeholder="請輸入完整姓名"
                       />
-                      <div>
-                        <div className="font-medium text-gray-900">可修改手術排程</div>
-                        <div className="text-sm text-gray-500 mt-1">
-                          可以查看、新增、修改和刪除手術排程資料
-                        </div>
-                      </div>
-                    </label>
+                      {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
+                    </div>
 
-                    <label className="flex items-start p-4 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2 text-left">
+                        電子信箱 <span className="text-red-500">*</span>
+                      </label>
                       <input
-                        type="radio"
-                        name="permission"
-                        value="0"
-                        checked={formData.permission === '0'}
-                        onChange={(e) => handleChange('permission', e.target.value)}
-                        className="mt-1 mr-4"
+                        type="email"
+                        value={formData.email}
+                        onChange={(e) => handleChange('email', e.target.value)}
+                        className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          errors.email ? 'border-red-500' : 'border-gray-300'
+                        }`}
+                        placeholder="example@hospital.com"
                       />
-                      <div>
-                        <div className="font-medium text-gray-900">僅可查看手術排程</div>
-                        <div className="text-sm text-gray-500 mt-1">
-                          只能查看手術排程資料，無法進行修改
-                        </div>
-                      </div>
-                    </label>
+                      {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email}</p>}
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* 注意事項 */}
-              <div className="bg-blue-50 p-6 rounded-lg">
-                <h3 className="font-medium text-blue-900 mb-3 flex items-center">
-                  <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  注意事項
-                </h3>
-                <ul className="text-sm text-blue-800 space-y-1">
-                  <li>• 電子信箱將用於發送註冊邀請信件</li>
-                  <li>• 請確認信箱地址正確，避免邀請信件無法送達</li>
-                  <li>• 員工需要完成 FIDO 生物識別註冊後才能使用系統</li>
-                  <li>• 員工編號一旦生成將無法修改</li>
-                </ul>
+              {/* 中欄 */}
+              <div className="space-y-6">
+                {/* 部門設定區塊 */}
+                <div className="border rounded-lg p-6 min-h-[320px]">
+                  <h2 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                    <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center mr-3 text-sm font-bold">2</div>
+                    部門設定
+                  </h2>
+                  
+                  <div className="space-y-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2 text-left">
+                        科別 <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={formData.department_code}
+                        onChange={(e) => handleChange('department_code', e.target.value)}
+                        className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          errors.department_code ? 'border-red-500' : 'border-gray-300'
+                        }`}
+                      >
+                        <option value="">請選擇科別</option>
+                        {departments.map(dept => (
+                          <option key={dept.code} value={dept.code}>
+                            {dept.name} ({dept.code})
+                          </option>
+                        ))}
+                      </select>
+                      {errors.department_code && <p className="text-red-500 text-sm mt-1">{errors.department_code}</p>}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2 text-left">
+                        職位 <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={formData.role}
+                        onChange={(e) => handleChange('role', e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="D">醫師</option>
+                        <option value="N">護理人員</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              {/* 提交按鈕 */}
-              <div className="flex justify-end space-x-3 pt-6">
-                <button
-                  onClick={onBack}
-                  className="px-8 py-3 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
-                >
-                  取消
-                </button>
-                <button
-                  onClick={handlePreSubmit}
-                  className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-                >
-                  新增員工
-                </button>
+              {/* 右欄 */}
+              <div className="space-y-6">
+                {/* 權限設定區塊 */}
+                <div className="border rounded-lg p-6 min-h-[320px]">
+                  <h2 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                    <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center mr-3 text-sm font-bold">3</div>
+                    權限設定
+                  </h2>
+                  
+                  <div className="space-y-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-3 text-left">
+                      系統權限 <span className="text-red-500">*</span>
+                    </label>
+                    
+                    <div className="space-y-3">
+                      <label className="flex items-start p-4 border rounded-lg cursor-pointer hover:bg-gray-50">
+                        <input
+                          type="radio"
+                          name="permission"
+                          value="1"
+                          checked={formData.permission === '1'}
+                          onChange={(e) => handleChange('permission', e.target.value)}
+                          className="mt-1 mr-3"
+                        />
+                        <div>
+                          <div className="font-medium text-gray-900 text-left">可修改手術排程</div>
+                          <div className="text-sm text-gray-500 mt-1">
+                            可查看、新增、修改和刪除手術排程資料
+                          </div>
+                        </div>
+                      </label>
+
+                      <label className="flex items-start p-4 border rounded-lg cursor-pointer hover:bg-gray-50">
+                        <input
+                          type="radio"
+                          name="permission"
+                          value="0"
+                          checked={formData.permission === '0'}
+                          onChange={(e) => handleChange('permission', e.target.value)}
+                          className="mt-1 mr-3"
+                        />
+                        <div>
+                          <div className="font-medium text-gray-900 text-left">僅可查看手術排程</div>
+                          <div className="text-sm text-gray-500 mt-1">
+                            只能查看手術排程資料，無法進行修改
+                          </div>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                </div>
               </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-8 pt-8">
+              {/* 員工編號預覽區塊 */}
+                <div className="border rounded-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <svg className="w-5 h-5 text-blue-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                    員工編號預覽
+                  </h3>
+                  
+                  {formData.department_code && formData.role && formData.permission ? (
+                    <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+                      <div className="flex items-center mb-2">
+                        <svg className="w-5 h-5 text-green-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span className="font-medium text-green-900">生成的員工編號</span>
+                      </div>
+                      <div className="text-xl font-mono font-bold text-green-700 bg-white px-3 py-2 rounded border mb-3">
+                        {preview || '生成中...'}
+                      </div>
+                      <p className="text-sm text-green-600">
+                        格式：{formData.role === 'D' ? '醫師' : '護理人員'} + {formData.department_code} + 權限等級 + 流水號
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                      <div className="flex items-center mb-2">
+                        <svg className="w-5 h-5 text-gray-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span className="font-medium text-gray-600">等待生成</span>
+                      </div>
+                      <p className="text-sm text-gray-500">
+                        請選擇科別、角色和權限後，系統將自動生成員工編號
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* 注意事項 */}
+                <div className="bg-blue-50 p-6 rounded-lg">
+                  <h3 className="font-medium text-blue-900 mb-3 flex items-center">
+                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    注意事項
+                  </h3>
+                  <ul className="text-sm text-blue-800 space-y-4">
+                    <li className="flex items-start">
+                    </li>
+                    <li className="flex items-start">
+                      <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-2 mr-3 flex-shrink-0"></span>
+                      電子信箱將用於發送註冊邀請信件
+                    </li>
+                    <li className="flex items-start">
+                      <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-2 mr-3 flex-shrink-0"></span>
+                      請確認信箱地址正確，避免邀請信件無法送達
+                    </li>
+                    <li className="flex items-start">
+                      <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-2 mr-3 flex-shrink-0"></span>
+                      員工需要完成身分驗證註冊後才能使用系統
+                    </li>
+                    <li className="flex items-start">
+                      <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-2 mr-3 flex-shrink-0"></span>
+                      員工編號一旦生成將無法修改
+                    </li>
+                  </ul>
+                </div>
+            </div>
+            {/* 提交按鈕 */}
+            <div className="flex justify-end space-x-3 pt-8 mt-8 border-t">
+              <button
+                onClick={onBack}
+                className="px-8 py-3 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handlePreSubmit}
+                className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+              >
+                新增員工
+              </button>
             </div>
           </div>
         </div>
