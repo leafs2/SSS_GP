@@ -14,7 +14,7 @@ const EmployeeVerification = () => {
 
   const verifyRegistrationToken = async () => {
     try {
-      const response = await fetch(`/api/verify-registration-token/${token}`);
+      const response = await fetch(`http://localhost:3001/api/verify-registration-token/${token}`);
       const data = await response.json();
       
       if (response.ok) {

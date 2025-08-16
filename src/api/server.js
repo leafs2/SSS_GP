@@ -2,9 +2,14 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import db from "./db.js";
+import nodemailer from "nodemailer";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 
-// 載入環境變數
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const envPath = join(__dirname, "../../.env");
+dotenv.config({ path: envPath });
 
 const app = express();
 
@@ -110,16 +115,53 @@ app.post("/api/employees", async (req, res) => {
     // 更新部門計數器
     await updateDepartmentCount(department_code, role);
 
-    res.json({
-      success: true,
-      data: {
-        id: result.insertId,
-        employee_id: employeeId,
-        name: name,
-        email: email,
-        message: "員工新增成功",
-      },
-    });
+    // 立即發送註冊邀請信件
+    const employeeData = {
+      id: result.insertId,
+      employee_id: employeeId,
+      name,
+      email,
+      role,
+      permission,
+    };
+
+    try {
+      // 生成註冊 token
+      const token = Buffer.from(
+        `${employeeId}:${Date.now() + 24 * 60 * 60 * 1000}`
+      ).toString("base64");
+
+      // 建立註冊連結
+      const registrationUrl = `${process.env.FRONTEND_URL}/register/${token}`;
+
+      // 發送信件
+      await sendRegistrationEmail(email, name, employeeData, registrationUrl);
+
+      res.json({
+        success: true,
+        data: {
+          id: result.insertId,
+          employee_id: employeeId,
+          name: name,
+          email: email,
+          message: "員工新增成功且邀請信件已發送",
+        },
+      });
+    } catch (emailError) {
+      console.error("發送邀請信件失敗:", emailError);
+
+      res.json({
+        success: true,
+        data: {
+          id: result.insertId,
+          employee_id: employeeId,
+          name: name,
+          email: email,
+          message: "員工新增成功，但邀請信件發送失敗",
+          emailError: emailError.message,
+        },
+      });
+    }
   } catch (error) {
     console.error("新增員工失敗:", error);
     res.status(500).json({ success: false, error: error.message });
@@ -278,19 +320,13 @@ app.post("/api/send-registration-email/:id", async (req, res) => {
     await sendRegistrationEmail(
       employeeData.email,
       employeeData.name,
-      employeeData.employee_id,
+      employeeData,
       registrationUrl
-    );
-
-    // 更新員工狀態為 email_sent
-    await db.execute(
-      "UPDATE employees SET status = 'email_sent', updated_at = NOW() WHERE id = ?",
-      [id]
     );
 
     res.json({
       success: true,
-      message: "註冊信件已發送",
+      message: "註冊信件已重新發送",
       email: employeeData.email,
     });
   } catch (error) {
@@ -322,7 +358,7 @@ app.get("/api/verify-registration-token/:token", async (req, res) => {
       SELECT e.*, d.name as department_name 
       FROM employees e 
       LEFT JOIN departments d ON e.department_code = d.code 
-      WHERE e.employee_id = ? AND e.status IN ('pending', 'email_sent')
+      WHERE e.employee_id = ? AND e.status = 'pending'
     `,
       [employeeId]
     );
@@ -334,7 +370,7 @@ app.get("/api/verify-registration-token/:token", async (req, res) => {
       });
     }
 
-    // 檢查是否已有 FIDO 憑證
+    // 檢查是否已有 FIDO 憑證（雙重保險）
     const [existingCred] = await db.execute(
       "SELECT id FROM fido_credentials WHERE employee_id = ?",
       [employeeId]
@@ -357,6 +393,40 @@ app.get("/api/verify-registration-token/:token", async (req, res) => {
       success: false,
       message: "無效的註冊連結",
     });
+  }
+});
+
+// FIDO 註冊完成 API
+app.post("/api/fido/registration/complete", async (req, res) => {
+  const { employee_id } = req.body;
+
+  try {
+    // 檢查員工是否存在且狀態為 pending
+    const [employee] = await db.execute(
+      "SELECT * FROM employees WHERE employee_id = ? AND status = 'pending'",
+      [employee_id]
+    );
+
+    if (employee.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "員工不存在或已完成註冊",
+      });
+    }
+
+    // 更新員工狀態為 active（已完成註冊啟用）
+    await db.execute(
+      "UPDATE employees SET status = 'active', updated_at = NOW() WHERE employee_id = ?",
+      [employee_id]
+    );
+
+    res.json({
+      success: true,
+      message: "FIDO 註冊完成，帳號已啟用",
+    });
+  } catch (error) {
+    console.error("完成 FIDO 註冊失敗:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -405,14 +475,8 @@ app.post("/api/send-bulk-registration-emails", async (req, res) => {
       await sendRegistrationEmail(
         employeeData.email,
         employeeData.name,
-        employeeData.employee_id,
+        employeeData,
         registrationUrl
-      );
-
-      // 更新狀態
-      await db.execute(
-        "UPDATE employees SET status = 'email_sent', updated_at = NOW() WHERE id = ?",
-        [id]
       );
 
       results.push({
@@ -444,25 +508,108 @@ app.post("/api/send-bulk-registration-emails", async (req, res) => {
   });
 });
 
-// 郵件發送函數
-async function sendRegistrationEmail(email, name, employeeId, registrationUrl) {
-  // 建立郵件傳輸器
-  const transporter = nodemailer.createTransporter({
-    host: process.env.SMTP_HOST || "smtp.gmail.com",
-    port: process.env.SMTP_PORT || 587,
-    secure: false,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASSWORD,
-    },
-  });
+// 修正員工狀態切換
+app.put("/api/employees/:id/status", async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
 
-  // 郵件內容
-  const mailOptions = {
-    from: `"醫院資訊室" <${process.env.SMTP_USER}>`,
-    to: email,
-    subject: "【重要通知】手術排程系統帳號啟用",
-    html: `
+  // 驗證狀態值
+  const validStatuses = ["pending", "active", "inactive"];
+  if (!validStatuses.includes(status)) {
+    return res.status(400).json({
+      success: false,
+      error: "無效的狀態值",
+    });
+  }
+
+  try {
+    // 檢查員工是否存在
+    const [existing] = await db.execute(
+      "SELECT * FROM employees WHERE id = ?",
+      [id]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "員工不存在",
+      });
+    }
+
+    // 更新員工狀態
+    await db.execute(
+      "UPDATE employees SET status = ?, updated_at = NOW() WHERE id = ?",
+      [status, id]
+    );
+
+    res.json({
+      success: true,
+      message: `員工狀態已更新為 ${status}`,
+    });
+  } catch (error) {
+    console.error("更新員工狀態失敗:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 郵件發送函數
+async function sendRegistrationEmail(
+  email,
+  name,
+  employeeData,
+  registrationUrl
+) {
+  // 🔧 加入詳細的除錯訊息
+  console.log("🚀 開始發送郵件流程...");
+  console.log("📧 收件者:", email);
+  console.log("👤 收件人:", name);
+  console.log("🔗 註冊連結:", registrationUrl);
+
+  // 🔧 檢查環境變數
+  console.log("🔧 環境變數檢查:");
+  console.log("SMTP_HOST:", process.env.SMTP_HOST || "❌ 未設定");
+  console.log("SMTP_PORT:", process.env.SMTP_PORT || "❌ 未設定");
+  console.log("SMTP_USER:", process.env.SMTP_USER || "❌ 未設定");
+  console.log(
+    "SMTP_PASSWORD:",
+    process.env.SMTP_PASSWORD
+      ? `✅ 已設定 (長度: ${process.env.SMTP_PASSWORD.length})`
+      : "❌ 未設定"
+  );
+
+  // 🔧 檢查必要參數
+  if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
+    throw new Error(
+      "SMTP 認證資訊缺失：請檢查 SMTP_USER 和 SMTP_PASSWORD 環境變數"
+    );
+  }
+
+  try {
+    // 建立郵件傳輸器
+    console.log("🔧 建立 SMTP 傳輸器...");
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || "smtp.gmail.com",
+      port: parseInt(process.env.SMTP_PORT || "587"),
+      secure: false, // true for 465, false for other ports
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASSWORD,
+      },
+      debug: true, // 開啟除錯模式
+      logger: true, // 開啟日誌
+    });
+
+    // 🔧 測試連線
+    console.log("🔗 測試 SMTP 連線...");
+    await transporter.verify();
+    console.log("✅ SMTP 連線驗證成功");
+
+    // 郵件內容
+    const mailOptions = {
+      from: `"醫院資訊室" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: "【重要通知】手術排程系統帳號啟用",
+      html: `
       <!DOCTYPE html>
       <html>
       <head>
@@ -505,10 +652,10 @@ async function sendRegistrationEmail(email, name, employeeId, registrationUrl) {
             </p>
             
             <div class="info-box">
-              <div class="info-title">📋 您的帳號資訊</div>
+              <div class="info-title">您的帳號資訊</div>
               <div class="info-row">
                 <span class="info-label">員工編號</span>
-                <span class="info-value">${employeeId}</span>
+                <span class="info-value">${employeeData.employee_id}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">登記信箱</span>
@@ -564,13 +711,24 @@ async function sendRegistrationEmail(email, name, employeeId, registrationUrl) {
       </body>
       </html>
     `,
-  };
+    };
 
-  // 發送郵件
-  const info = await transporter.sendMail(mailOptions);
-  console.log("郵件發送成功:", info.messageId);
+    // 🔧 發送郵件
+    console.log("📤 開始發送郵件...");
+    const info = await transporter.sendMail(mailOptions);
+    console.log("✅ 郵件發送成功:", info.messageId);
+    console.log("📬 接受的收件者:", info.accepted);
+    console.log("❌ 拒絕的收件者:", info.rejected);
 
-  return info;
+    return info;
+  } catch (error) {
+    console.error("❌ 郵件發送過程中發生錯誤:");
+    console.error("錯誤類型:", error.name);
+    console.error("錯誤訊息:", error.message);
+    console.error("錯誤代碼:", error.code);
+    console.error("完整錯誤:", error);
+    throw error;
+  }
 }
 
 // 輔助函數：生成員工編號

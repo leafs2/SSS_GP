@@ -23,6 +23,7 @@ function Dashboard() {
   const [statusFilter, setStatusFilter] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
+  const [sendingEmail, setSendingEmail] = useState({});
 
   const loadEmployees = async () => {
     setLoading(true);
@@ -96,22 +97,40 @@ function Dashboard() {
   };
 
   // 處理重發邀請
-  const handleResendInvite = async (employeeId) => {
-    if (!confirm('確定要重新發送註冊邀請嗎？')) return;
+  const handleResendInvite = async (employeeId, employeeName) => {
+    if (!confirm(`確定要重新發送註冊邀請給 ${employeeName} 嗎？`)) return;
+    
+    setSendingEmail(prev => ({ ...prev, [employeeId]: true }));
     
     try {
-      alert('註冊邀請已重新發送！');
+      const response = await fetch(`http://localhost:3001/api/send-registration-email/${employeeId}`, {
+        method: 'POST'
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        alert(`✅ 註冊邀請已重新發送給 ${employeeName}！\n信箱：${data.email}`);
+        loadEmployees(); // 重新載入列表
+      } else {
+        alert(`❌ 發送失敗：${data.error}`);
+      }
     } catch (error) {
-      alert('重發邀請失敗：' + error.message);
+      console.error('發送邀請失敗:', error);
+      alert('❌ 發送失敗：網路錯誤');
     }
+    
+    setSendingEmail(prev => ({ ...prev, [employeeId]: false }));
   };
 
-  // 處理刪除/停用員工
-  const handleDelete = async (employeeId) => {
-    const employee = employees.find(emp => emp.id === employeeId);
-    const action = employee.status === 'active' ? '停用' : '刪除';
+  // 處理刪除員工
+  const handleDelete = async (employeeId, employeeName, status) => {
+    if (status !== 'pending') {
+      alert('只能刪除待註冊狀態的員工，已啟用的員工請使用停用功能');
+      return;
+    }
     
-    if (!confirm(`確定要${action}此員工嗎？`)) return;
+    if (!confirm(`確定要刪除 ${employeeName} 嗎？此操作無法復原。`)) return;
     
     try {
       const response = await fetch(`http://localhost:3001/api/employees/${employeeId}`, {
@@ -121,19 +140,58 @@ function Dashboard() {
       const data = await response.json();
       
       if (data.success) {
-        alert(`員工${action}成功！`);
+        alert(`✅ 員工 ${employeeName} 已刪除`);
         loadEmployees();
       } else {
-        alert(`${action}失敗：` + data.error);
+        alert(`❌ 刪除失敗：${data.error}`);
       }
     } catch (error) {
-      console.error(`${action}員工失敗:`, error);
-      alert(`${action}失敗：無法連接到伺服器`);
+      console.error('刪除員工失敗:', error);
+      alert('❌ 刪除失敗：無法連接到伺服器');
+    }
+  };
+
+  const handleStatusChange = async (employeeId, currentStatus, employeeName) => {
+    let newStatus;
+    let actionText;
+    
+    if (currentStatus === 'active') {
+      newStatus = 'inactive';
+      actionText = '停用';
+    } else if (currentStatus === 'inactive') {
+      newStatus = 'active';
+      actionText = '啟用';
+    } else {
+      // pending 狀態不允許直接切換，需要完成註冊
+      alert('待註冊狀態的員工需要完成 FIDO 註冊後才能啟用');
+      return;
+    }
+    
+    if (!confirm(`確定要${actionText} ${employeeName} 嗎？`)) return;
+    
+    try {
+      const response = await fetch(`http://localhost:3001/api/employees/${employeeId}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        alert(`✅ ${employeeName} 已${actionText}`);
+        loadEmployees();
+      } else {
+        alert(`❌ ${actionText}失敗：${data.error}`);
+      }
+    } catch (error) {
+      console.error(`${actionText}失敗:`, error);
+      alert(`❌ ${actionText}失敗：網路錯誤`);
     }
   };
 
   const handleAddEmployee = () => {
-    alert('導航到新增員工頁面 (功能開發中)');
+    window.location.href = '/admin/add';
   };
 
   // 清除所有篩選
@@ -432,24 +490,55 @@ function Dashboard() {
                           {employee.status === 'pending' && (
                             <button 
                               className="text-green-600 hover:text-green-900 transition-colors p-1"
-                              onClick={() => handleResendInvite(employee.id)}
+                              onClick={() => handleResendInvite(employee.id, employee.name)}
+                              disabled={sendingEmail[employee.id]}
                               title="重發邀請"
                             >
+                              {sendingEmail[employee.id] ? (
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-orange-600"></div>
+                              ) : (
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 7.89a2 2 0 002.83 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                               </svg>
+                              )}
                             </button>
                           )}
                           
-                          <button 
-                            className="text-red-600 hover:text-red-900 transition-colors p-1"
-                            onClick={() => handleDelete(employee.id)}
-                            title={employee.status === 'active' ? '停用員工' : '刪除員工'}
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </button>
+                          {/* 已啟用/已停用狀態：顯示狀態切換按鈕 */}
+                          {(employee.status === 'active' || employee.status === 'inactive') && (
+                            <button 
+                              className={`transition-colors p-1 ${
+                                employee.status === 'active' 
+                                  ? 'text-red-600 hover:text-red-900' 
+                                  : 'text-green-600 hover:text-green-900'
+                              }`}
+                              onClick={() => handleStatusChange(employee.id, employee.status, employee.name)}
+                              title={employee.status === 'active' ? '停用員工' : '啟用員工'}
+                            >
+                              {employee.status === 'active' ? (
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636m12.728 12.728L18.364 5.636M5.636 18.364l12.728-12.728" />
+                                </svg>
+                              ) : (
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                              )}
+                            </button>
+                          )}
+                          
+                          {/* 刪除按鈕：只有待註冊狀態才能刪除 */}
+                          {employee.status === 'pending' && (
+                            <button 
+                              className="text-red-600 hover:text-red-900 transition-colors p-1"
+                              onClick={() => handleDelete(employee.id, employee.name, employee.status)}
+                              title="刪除員工"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

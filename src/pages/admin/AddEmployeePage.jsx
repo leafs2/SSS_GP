@@ -105,14 +105,24 @@ function AddEmployeePage({ onBack, onSuccess }) {
       
       if (data.success) {
         setShowConfirmModal(false);
-        alert(`員工新增成功！\n員工編號：${data.data.employee_id}\n註冊邀請已發送至：${formData.email}`);
-        handleSuccess(); 
+        
+        if (data.data.emailError) {
+          alert(`🎉 員工新增成功！\n\n👤 員工編號：${data.data.employee_id}\n📧 註冊信箱：${formData.email}\n\n⚠️ 但邀請信件發送失敗：${data.data.emailError}\n\n請稍後從員工管理頁面重新發送邀請。`);
+        } else {
+          alert(`🎉 員工新增成功！\n\n👤 員工編號：${data.data.employee_id}\n📧 註冊信箱：${formData.email}\n✅ 註冊邀請已自動發送\n\n員工將收到包含 FIDO 註冊連結的邀請信件。`);
+        }
+        
+        // 成功後導向管理頁面
+        setTimeout(() => {
+          window.location.href = '/admin';
+        }, 3000);
+        
       } else {
-        alert('新增失敗：' + data.error);
+        alert('❌ 新增失敗：' + data.error);
       }
     } catch (error) {
       console.error('新增員工失敗:', error);
-      alert('新增失敗：無法連接到伺服器');
+      alert('❌ 新增失敗：無法連接到伺服器');
     } finally {
       setLoading(false);
     }
