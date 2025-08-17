@@ -5,16 +5,37 @@ import db from "./db.js";
 import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+} from "@simplewebauthn/server";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const envPath = join(__dirname, "../../.env");
 dotenv.config({ path: envPath });
 
+// FIDO 設定常數
+const RP_NAME = "醫院手術排程系統";
+const RP_ID = "localhost";
+const ORIGIN = process.env.FRONTEND_URL || "http://localhost:3000";
+const challenges = new Map();
+
 const app = express();
 
 // 中介軟體
-app.use(cors());
+app.use(
+  cors({
+    origin: [
+      "http://localhost:3000",
+      "https://localhost:3000",
+      process.env.FRONTEND_URL,
+    ],
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 app.use(express.json());
 
 // API 路由
@@ -358,7 +379,7 @@ app.get("/api/verify-registration-token/:token", async (req, res) => {
       SELECT e.*, d.name as department_name 
       FROM employees e 
       LEFT JOIN departments d ON e.department_code = d.code 
-      WHERE e.employee_id = ? AND e.status = 'pending'
+      WHERE e.employee_id = ?
     `,
       [employeeId]
     );
@@ -366,9 +387,11 @@ app.get("/api/verify-registration-token/:token", async (req, res) => {
     if (employee.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "員工不存在或已完成註冊",
+        message: "員工不存在",
       });
     }
+
+    const employeeData = employee[0];
 
     // 檢查是否已有 FIDO 憑證（雙重保險）
     const [existingCred] = await db.execute(
@@ -376,22 +399,38 @@ app.get("/api/verify-registration-token/:token", async (req, res) => {
       [employeeId]
     );
 
-    if (existingCred.length > 0) {
+    // 根據員工狀態和憑證情況返回不同回應
+    if (employeeData.status === "active" && existingCred.length > 0) {
+      // 已完成註冊
+      return res.json({
+        success: true,
+        employee: employeeData,
+        status: "completed",
+        message: "您已完成 FIDO 註冊",
+        completedAt: existingCred[0].created_at,
+      });
+    } else if (employeeData.status === "pending") {
+      // 可以進行註冊
+      return res.json({
+        success: true,
+        employee: employeeData,
+        status: "pending",
+        message: "請完成 FIDO 註冊設定",
+      });
+    } else {
+      // 其他狀態（如 inactive）
       return res.status(400).json({
         success: false,
-        message: "此員工已完成註冊",
+        message: "帳號狀態異常，請聯繫管理員",
+        status: employeeData.status,
       });
     }
-
-    res.json({
-      success: true,
-      employee: employee[0],
-    });
   } catch (error) {
     console.error("驗證註冊 token 失敗:", error);
     res.status(400).json({
       success: false,
       message: "無效的註冊連結",
+      invalid: true,
     });
   }
 });
@@ -508,6 +547,62 @@ app.post("/api/send-bulk-registration-emails", async (req, res) => {
   });
 });
 
+// 🔧 新增專門的成功頁面檢查 API
+app.get("/api/registration-status/:token", async (req, res) => {
+  const { token } = req.params;
+
+  try {
+    // 解碼 token
+    const decoded = Buffer.from(token, "base64").toString();
+    const [employeeId, expireTime] = decoded.split(":");
+
+    // 查詢員工資料
+    const [employee] = await db.execute(
+      `SELECT e.*, d.name as department_name 
+       FROM employees e 
+       LEFT JOIN departments d ON e.department_code = d.code 
+       WHERE e.employee_id = ?`,
+      [employeeId]
+    );
+
+    if (employee.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "員工不存在",
+      });
+    }
+
+    const employeeData = employee[0];
+
+    // 檢查 FIDO 憑證
+    const [credentials] = await db.execute(
+      "SELECT created_at, device_name FROM fido_credentials WHERE employee_id = ?",
+      [employeeId]
+    );
+
+    const hasCredentials = credentials.length > 0;
+
+    res.json({
+      success: true,
+      employee: employeeData,
+      hasCredentials,
+      registrationCompleted: employeeData.status === "active" && hasCredentials,
+      credentialInfo: hasCredentials
+        ? {
+            registeredAt: credentials[0].created_at,
+            deviceName: credentials[0].device_name,
+          }
+        : null,
+    });
+  } catch (error) {
+    console.error("檢查註冊狀態失敗:", error);
+    res.status(400).json({
+      success: false,
+      message: "無效的連結",
+    });
+  }
+});
+
 // 修正員工狀態切換
 app.put("/api/employees/:id/status", async (req, res) => {
   const { id } = req.params;
@@ -552,6 +647,252 @@ app.put("/api/employees/:id/status", async (req, res) => {
   }
 });
 
+// FIDO 註冊開始
+app.post("/api/fido/registration/begin", async (req, res) => {
+  const { employee_id } = req.body;
+
+  try {
+    console.log("開始 FIDO 註冊流程，員工編號:", employee_id);
+
+    // 檢查員工是否存在且狀態為 pending
+    const [employee] = await db.execute(
+      "SELECT * FROM employees WHERE employee_id = ? AND status = 'pending'",
+      [employee_id]
+    );
+
+    if (employee.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "員工不存在或已完成註冊",
+      });
+    }
+
+    const employeeData = employee[0];
+
+    // 檢查是否已有 FIDO 憑證
+    const [existingCreds] = await db.execute(
+      "SELECT id, credential_id FROM fido_credentials WHERE employee_id = ?",
+      [employee_id]
+    );
+
+    // 準備排除的憑證列表
+    const excludeCredentials = existingCreds.map((cred) => ({
+      id: Buffer.from(cred.credential_id, "base64"),
+      type: "public-key",
+      transports: ["hybrid", "usb"],
+    }));
+
+    // 生成註冊選項
+    const options = await generateRegistrationOptions({
+      rpName: RP_NAME,
+      rpID: RP_ID,
+      userID: Buffer.from(employee_id, "utf8"),
+      userName: employeeData.email,
+      userDisplayName: employeeData.name,
+      timeout: 300000,
+      attestationType: "direct",
+      excludeCredentials,
+      authenticatorSelection: {
+        authenticatorAttachment: "cross-platform",
+        residentKey: "preferred",
+        userVerification: "required",
+      },
+      supportedAlgorithmIDs: [-7, -257],
+    });
+
+    // 儲存挑戰值
+    challenges.set(employee_id, {
+      challenge: options.challenge,
+      type: "mobile",
+      timestamp: Date.now(),
+    });
+
+    res.json({
+      success: true,
+      options,
+      method: "mobile_authenticator",
+      instructions: {
+        title: "使用手機作為安全金鑰",
+        steps: [
+          "確保手機藍牙已開啟",
+          "手機靠近電腦 (約1公尺內)",
+          "瀏覽器會引導您配對手機",
+          "在手機上完成生物識別驗證",
+        ],
+      },
+    });
+  } catch (error) {
+    console.error("FIDO 註冊開始失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: `FIDO 註冊開始失敗: ${error.message}`,
+    });
+  }
+});
+
+// FIDO 註冊驗證
+app.post("/api/fido/registration/verify", async (req, res) => {
+  const { employee_id, attResp } = req.body;
+
+  try {
+    console.log("驗證 FIDO 註冊回應，員工編號:", employee_id);
+
+    // 檢查員工是否存在
+    const [employee] = await db.execute(
+      "SELECT * FROM employees WHERE employee_id = ? AND status = 'pending'",
+      [employee_id]
+    );
+
+    if (employee.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "員工不存在或已完成註冊",
+      });
+    }
+
+    // 取得挑戰值
+    const storedChallenge = challenges.get(employee_id);
+    if (!storedChallenge) {
+      return res.status(400).json({
+        success: false,
+        error: "找不到對應的挑戰值，請重新開始註冊",
+      });
+    }
+
+    // 驗證註冊回應
+    const verification = await verifyRegistrationResponse({
+      response: attResp,
+      expectedChallenge: storedChallenge.challenge,
+      expectedOrigin: ORIGIN,
+      expectedRPID: RP_ID,
+      requireUserVerification: false,
+      expectedType: "webauthn.create",
+    });
+
+    if (!verification.verified) {
+      return res.status(400).json({
+        success: false,
+        error: "FIDO 註冊驗證失敗",
+      });
+    }
+
+    const { registrationInfo } = verification;
+
+    if (!registrationInfo) {
+      return res.status(400).json({
+        success: false,
+        error: "驗證回應缺少註冊資訊",
+      });
+    }
+
+    // 獲取憑證資料
+    let credentialID = registrationInfo.credential?.id || attResp.id;
+    let credentialPublicKey =
+      registrationInfo.credential?.publicKey ||
+      Buffer.from(attResp.response.publicKey, "base64");
+
+    // 如果還是找不到，嘗試手動解析
+    if (!credentialID && attResp.id) {
+      credentialID = Buffer.from(attResp.id, "base64url");
+    }
+
+    if (!credentialPublicKey && attResp.response?.publicKey) {
+      credentialPublicKey = Buffer.from(attResp.response.publicKey, "base64");
+    }
+
+    if (!credentialID || !credentialPublicKey) {
+      return res.status(400).json({
+        success: false,
+        error: "無法獲取憑證資料",
+      });
+    }
+
+    // 轉換為 base64
+    const credentialIdBase64 = Buffer.from(credentialID).toString("base64");
+    const publicKeyBase64 = Buffer.from(credentialPublicKey).toString("base64");
+
+    // 儲存憑證
+    await db.execute(
+      `INSERT INTO fido_credentials 
+       (employee_id, credential_id, public_key, counter, device_name, transports, created_at) 
+       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        employee_id,
+        credentialIdBase64,
+        publicKeyBase64,
+        registrationInfo.credential?.counter || 0,
+        getDeviceName(attResp, req),
+        JSON.stringify(attResp.response?.transports || ["hybrid"]),
+      ]
+    );
+
+    // 更新員工狀態
+    await db.execute(
+      "UPDATE employees SET status = 'active' WHERE employee_id = ?",
+      [employee_id]
+    );
+
+    // 清除挑戰值
+    challenges.delete(employee_id);
+
+    console.log("FIDO 註冊完成，員工狀態已更新為 active");
+
+    res.json({
+      success: true,
+      message: "FIDO 註冊成功，帳號已啟用",
+      verified: verification.verified,
+    });
+  } catch (error) {
+    console.error("FIDO 註冊驗證失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: `FIDO 註冊驗證失敗: ${error.message}`,
+    });
+  }
+});
+
+// FIDO 註冊狀態檢查
+app.get("/api/fido/registration/status/:employee_id", async (req, res) => {
+  const { employee_id } = req.params;
+
+  try {
+    // 檢查員工狀態
+    const [employee] = await db.execute(
+      "SELECT status FROM employees WHERE employee_id = ?",
+      [employee_id]
+    );
+
+    if (employee.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "員工不存在",
+      });
+    }
+
+    // 檢查 FIDO 憑證
+    const [credentials] = await db.execute(
+      "SELECT COUNT(*) as count FROM fido_credentials WHERE employee_id = ?",
+      [employee_id]
+    );
+
+    const hasCredentials = credentials[0].count > 0;
+    const employeeStatus = employee[0].status;
+
+    res.json({
+      success: true,
+      status: employeeStatus,
+      has_credentials: hasCredentials,
+      can_register: employeeStatus === "pending" && !hasCredentials,
+    });
+  } catch (error) {
+    console.error("檢查 FIDO 註冊狀態失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
 // 郵件發送函數
 async function sendRegistrationEmail(
   email,
@@ -564,18 +905,6 @@ async function sendRegistrationEmail(
   console.log("📧 收件者:", email);
   console.log("👤 收件人:", name);
   console.log("🔗 註冊連結:", registrationUrl);
-
-  // 🔧 檢查環境變數
-  console.log("🔧 環境變數檢查:");
-  console.log("SMTP_HOST:", process.env.SMTP_HOST || "❌ 未設定");
-  console.log("SMTP_PORT:", process.env.SMTP_PORT || "❌ 未設定");
-  console.log("SMTP_USER:", process.env.SMTP_USER || "❌ 未設定");
-  console.log(
-    "SMTP_PASSWORD:",
-    process.env.SMTP_PASSWORD
-      ? `✅ 已設定 (長度: ${process.env.SMTP_PASSWORD.length})`
-      : "❌ 未設定"
-  );
 
   // 🔧 檢查必要參數
   if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
@@ -785,6 +1114,49 @@ async function updateDepartmentCount(departmentCode, role) {
     // 這個錯誤不影響主要功能，所以只記錄不拋出
   }
 }
+
+// 輔助函數：取得設備名稱
+function getDeviceName(attResp, req) {
+  try {
+    // 從 HTTP request headers 獲取 User-Agent
+    const userAgent = req?.headers?.["user-agent"] || "";
+
+    console.log("🔍 User-Agent:", userAgent);
+
+    if (userAgent.includes("iPhone")) return "iPhone";
+    if (userAgent.includes("iPad")) return "iPad";
+    if (userAgent.includes("Android")) return "Android 手機";
+    if (userAgent.includes("Windows")) return "Windows 設備";
+    if (userAgent.includes("Mac")) return "Mac 設備";
+
+    // 檢查 transports
+    if (attResp?.response?.transports) {
+      if (attResp.response.transports.includes("hybrid")) {
+        return "手機認證器";
+      }
+    }
+
+    return "手機認證器"; // 預設為手機認證器
+  } catch (error) {
+    console.error("❌ 獲取設備名稱失敗:", error);
+    return "手機認證器";
+  }
+}
+
+function cleanupExpiredChallenges() {
+  const now = Date.now();
+  const expireTime = 10 * 60 * 1000; // 10分鐘
+
+  for (const [key, value] of challenges.entries()) {
+    if (now - value.timestamp > expireTime) {
+      console.log(`🧹 清理過期挑戰值: ${key}`);
+      challenges.delete(key);
+    }
+  }
+}
+
+// 每5分鐘清理一次過期挑戰值
+setInterval(cleanupExpiredChallenges, 5 * 60 * 1000);
 
 // 健康檢查端點
 app.get("/api/health", (req, res) => {
