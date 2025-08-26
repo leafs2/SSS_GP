@@ -8,6 +8,8 @@ import { dirname, join } from "path";
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
+  generateAuthenticationOptions,
+  verifyAuthenticationResponse,
 } from "@simplewebauthn/server";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -19,7 +21,9 @@ dotenv.config({ path: envPath });
 const RP_NAME = "醫院手術排程系統";
 const RP_ID = "localhost";
 const ORIGIN = process.env.FRONTEND_URL || "http://localhost:3000";
+
 const challenges = new Map();
+const loginChallenges = new Map();
 
 const app = express();
 
@@ -786,10 +790,16 @@ app.post("/api/fido/registration/verify", async (req, res) => {
     }
 
     // 獲取憑證資料
-    let credentialID = registrationInfo.credential?.id || attResp.id;
+    let credentialID = attResp.id;
     let credentialPublicKey =
       registrationInfo.credential?.publicKey ||
       Buffer.from(attResp.response.publicKey, "base64");
+
+    console.log("attResp.id:", attResp.id);
+    console.log(
+      "registrationInfo.credential?.id:",
+      registrationInfo.credential?.id
+    );
 
     // 如果還是找不到，嘗試手動解析
     if (!credentialID && attResp.id) {
@@ -808,7 +818,9 @@ app.post("/api/fido/registration/verify", async (req, res) => {
     }
 
     // 轉換為 base64
-    const credentialIdBase64 = Buffer.from(credentialID).toString("base64");
+    const credentialIdBase64 = Buffer.from(credentialID, "base64url").toString(
+      "base64"
+    );
     const publicKeyBase64 = Buffer.from(credentialPublicKey).toString("base64");
 
     // 儲存憑證
@@ -886,6 +898,285 @@ app.get("/api/fido/registration/status/:employee_id", async (req, res) => {
     });
   } catch (error) {
     console.error("檢查 FIDO 註冊狀態失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// FIDO 登入開始
+app.post("/api/fido/authentication/begin", async (req, res) => {
+  try {
+    console.log("🔐 開始 FIDO 登入認證流程");
+
+    // 獲取所有已註冊的有效憑證
+    const [credentials] = await db.execute(`
+      SELECT fc.credential_id, fc.transports, e.employee_id, e.name, e.email, 
+             e.department_code, d.name as department_name, e.role, e.permission
+      FROM fido_credentials fc
+      JOIN employees e ON fc.employee_id = e.employee_id  
+      LEFT JOIN departments d ON e.department_code = d.code
+      WHERE e.status = 'active'
+    `);
+
+    if (credentials.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "目前沒有已註冊的有效憑證",
+      });
+    }
+
+    // 修正：正確處理 transports 資料格式
+    const allowCredentials = credentials.map((cred) => {
+      // 直接使用陣列，不要 JSON.parse
+      let transports = Array.isArray(cred.transports)
+        ? cred.transports
+        : ["hybrid"];
+
+      return {
+        id: cred.credential_id, // 直接使用，不要轉換
+        transports: transports,
+      };
+    });
+
+    console.log("準備的憑證列表:", allowCredentials.length);
+
+    // 生成認證選項
+    const options = await generateAuthenticationOptions({
+      rpID: RP_ID,
+      timeout: 300000,
+      //allowCredentials: allowCredentials,
+      userVerification: "required",
+    });
+
+    // 生成唯一的會話 ID
+    const sessionId = Buffer.from(`${Date.now()}-${Math.random()}`).toString(
+      "base64url"
+    );
+
+    // 儲存登入挑戰值和憑證資訊
+    loginChallenges.set(sessionId, {
+      challenge: options.challenge,
+      credentials: credentials,
+      timestamp: Date.now(),
+    });
+
+    console.log(`✅ 生成認證選項成功，會話 ID: ${sessionId}`);
+    console.log(`📱 可用憑證數量: ${credentials.length}`);
+
+    res.json({
+      success: true,
+      options,
+      sessionId,
+      method: "mobile_authenticator",
+      instructions: {
+        title: "使用手機完成登入驗證",
+        steps: [
+          "確保手機藍牙已開啟",
+          "手機靠近電腦 (約1公尺內)",
+          "瀏覽器會自動偵測您的手機",
+          "在手機上完成生物識別驗證",
+        ],
+      },
+    });
+  } catch (error) {
+    console.error("❌ FIDO 登入認證開始失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: `登入認證開始失敗: ${error.message}`,
+    });
+  }
+});
+
+// FIDO 登入驗證
+app.post("/api/fido/authentication/verify", async (req, res) => {
+  const { sessionId, attResp } = req.body;
+
+  try {
+    console.log(`🔍 驗證 FIDO 登入回應，會話 ID: ${sessionId}`);
+
+    // 取得儲存的挑戰值和憑證資訊
+    const storedData = loginChallenges.get(sessionId);
+    if (!storedData) {
+      return res.status(400).json({
+        success: false,
+        error: "找不到對應的認證會話，請重新開始登入",
+      });
+    }
+
+    console.log("storedData 完整內容:");
+    console.log(JSON.stringify(storedData, null, 2));
+
+    console.log("attResp 完整內容:");
+    console.log(JSON.stringify(attResp, null, 2));
+
+    // 根據回應的憑證 ID 找到對應的使用者憑證
+    const credentialId = attResp.id;
+    console.log(`credentialId: ${credentialId}`);
+
+    const responseCredentialIdBase64 = Buffer.from(
+      credentialId,
+      "base64url"
+    ).toString("base64");
+    console.log(`轉換後的憑證 ID (base64): ${responseCredentialIdBase64}`);
+
+    const userCredential = storedData.credentials.find(
+      (cred) => cred.credential_id === responseCredentialIdBase64
+    );
+
+    if (!userCredential) {
+      return res.status(400).json({
+        success: false,
+        error: "找不到對應的使用者憑證",
+      });
+    }
+
+    // 從資料庫獲取完整的憑證資料進行驗證
+    const [dbCredentials] = await db.execute(
+      "SELECT * FROM fido_credentials WHERE credential_id = ? AND employee_id = ?",
+      [userCredential.credential_id, userCredential.employee_id]
+    );
+
+    if (dbCredentials.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "憑證資料驗證失敗",
+      });
+    }
+
+    const dbCredential = dbCredentials[0];
+
+    // 驗證認證回應
+    const verification = await verifyAuthenticationResponse({
+      response: attResp,
+      expectedChallenge: storedData.challenge,
+      expectedOrigin: ORIGIN,
+      expectedRPID: RP_ID,
+      credential: {
+        id: Buffer.from(dbCredential.credential_id, "base64"),
+        publicKey: Buffer.from(dbCredential.public_key, "base64"),
+        counter: dbCredential.counter,
+      },
+      requireUserVerification: false,
+    });
+
+    if (!verification.verified) {
+      return res.status(400).json({
+        success: false,
+        error: "FIDO 認證驗證失敗",
+      });
+    }
+
+    // 更新憑證計數器
+    if (verification.authenticationInfo?.newCounter !== undefined) {
+      await db.execute(
+        "UPDATE fido_credentials SET counter = ? WHERE credential_id = ?",
+        [verification.authenticationInfo.newCounter, dbCredential.credential_id]
+      );
+    }
+
+    // 清除登入挑戰值
+    loginChallenges.delete(sessionId);
+
+    // 準備使用者資訊回應
+    const userInfo = {
+      employee_id: userCredential.employee_id,
+      name: userCredential.name,
+      email: userCredential.email,
+      department_code: userCredential.department_code,
+      department_name: userCredential.department_name,
+      role: userCredential.role,
+      permission: userCredential.permission,
+      role_display: userCredential.role === "D" ? "醫師" : "護理師",
+      permission_display:
+        userCredential.permission === "1" ? "可修改排程" : "僅限查看",
+    };
+
+    console.log(`✅ FIDO 登入成功: ${userInfo.name} (${userInfo.employee_id})`);
+
+    res.json({
+      success: true,
+      message: "登入成功",
+      verified: verification.verified,
+      user: userInfo,
+      loginTime: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ FIDO 登入驗證失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: `登入驗證失敗: ${error.message}`,
+    });
+  }
+});
+
+// 1. 首先加入詳細的格式轉換除錯端點
+app.get("/api/debug/credential-formats/:credential_id", async (req, res) => {
+  const { credential_id } = req.params;
+
+  try {
+    // 測試所有可能的格式轉換
+    const formats = {
+      original: credential_id,
+
+      // 如果是 base64url，轉換為 base64
+      base64url_to_base64: (() => {
+        try {
+          return Buffer.from(credential_id, "base64url").toString("base64");
+        } catch (e) {
+          return `錯誤: ${e.message}`;
+        }
+      })(),
+
+      // 如果是 base64，轉換為 base64url
+      base64_to_base64url: (() => {
+        try {
+          return Buffer.from(credential_id, "base64").toString("base64url");
+        } catch (e) {
+          return `錯誤: ${e.message}`;
+        }
+      })(),
+
+      // 轉換為 hex 進行比對
+      to_hex: (() => {
+        try {
+          return Buffer.from(credential_id, "base64url").toString("hex");
+        } catch (e) {
+          try {
+            return Buffer.from(credential_id, "base64").toString("hex");
+          } catch (e2) {
+            return `錯誤: ${e2.message}`;
+          }
+        }
+      })(),
+    };
+
+    // 檢查是否與資料庫中的憑證匹配
+    const [dbCredentials] = await db.execute(
+      "SELECT credential_id, employee_id FROM fido_credentials"
+    );
+
+    const matches = dbCredentials.map((cred) => {
+      const dbHex = Buffer.from(cred.credential_id, "base64").toString("hex");
+      const inputHex = formats.to_hex;
+
+      return {
+        employee_id: cred.employee_id,
+        db_credential_id: cred.credential_id,
+        db_hex: dbHex,
+        matches: dbHex === inputHex,
+        base64_match: cred.credential_id === formats.base64url_to_base64,
+      };
+    });
+
+    res.json({
+      input_credential_id: credential_id,
+      format_conversions: formats,
+      database_matches: matches,
+      found_match: matches.some((m) => m.matches || m.base64_match),
+    });
+  } catch (error) {
     res.status(500).json({
       success: false,
       error: error.message,
@@ -1151,6 +1442,7 @@ function cleanupExpiredChallenges() {
     if (now - value.timestamp > expireTime) {
       console.log(`🧹 清理過期挑戰值: ${key}`);
       challenges.delete(key);
+      loginChallenges.delete(key);
     }
   }
 }

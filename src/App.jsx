@@ -3,6 +3,8 @@ import AdminDashboard from './pages/admin/Dashboard';
 import AddEmployeePage from './pages/admin/AddEmployeePage';
 import EmployeeVerification from './pages/register/EmployeeVerification';
 import FidoRegistration from './pages/register/FidoRegistration';
+import HospitalLogin from './pages/login/HospitalLogin';
+import NavigationPage from './pages/NavigationPage'; 
 
 import { useState } from 'react'
 import './App.css'
@@ -12,9 +14,9 @@ function App() {
   return (
     <Router>
       <Routes>
+        <Route path="/" element={<NavigationPage />} />
         {/* 公開路由 */}
-        {/* <Route path="/login" element={<Login />} />
-        <Route path="/mobile-auth" element={<MobileAuth />} /> */}
+        <Route path="/login" element={<HospitalLogin />} />
         
         {/* 需要登入的路由 */}
         {/* <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} /> */}
