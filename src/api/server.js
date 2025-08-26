@@ -795,11 +795,11 @@ app.post("/api/fido/registration/verify", async (req, res) => {
       registrationInfo.credential?.publicKey ||
       Buffer.from(attResp.response.publicKey, "base64");
 
-    console.log("attResp.id:", attResp.id);
-    console.log(
-      "registrationInfo.credential?.id:",
-      registrationInfo.credential?.id
+    // 轉換為 base64
+    const credentialIdBase64 = Buffer.from(credentialID, "base64url").toString(
+      "base64"
     );
+    const publicKeyBase64 = Buffer.from(credentialPublicKey).toString("base64");
 
     // 如果還是找不到，嘗試手動解析
     if (!credentialID && attResp.id) {
@@ -816,12 +816,6 @@ app.post("/api/fido/registration/verify", async (req, res) => {
         error: "無法獲取憑證資料",
       });
     }
-
-    // 轉換為 base64
-    const credentialIdBase64 = Buffer.from(credentialID, "base64url").toString(
-      "base64"
-    );
-    const publicKeyBase64 = Buffer.from(credentialPublicKey).toString("base64");
 
     // 儲存憑證
     await db.execute(
