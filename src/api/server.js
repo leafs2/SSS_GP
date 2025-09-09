@@ -921,7 +921,6 @@ app.post("/api/fido/authentication/begin", async (req, res) => {
       });
     }
 
-    // 修正：正確處理 transports 資料格式
     const allowCredentials = credentials.map((cred) => {
       // 直接使用陣列，不要 JSON.parse
       let transports = Array.isArray(cred.transports)
@@ -929,7 +928,7 @@ app.post("/api/fido/authentication/begin", async (req, res) => {
         : ["hybrid"];
 
       return {
-        id: cred.credential_id, // 直接使用，不要轉換
+        id: cred.credential_id,
         transports: transports,
       };
     });
@@ -1101,79 +1100,6 @@ app.post("/api/fido/authentication/verify", async (req, res) => {
     res.status(500).json({
       success: false,
       error: `登入驗證失敗: ${error.message}`,
-    });
-  }
-});
-
-// 1. 首先加入詳細的格式轉換除錯端點
-app.get("/api/debug/credential-formats/:credential_id", async (req, res) => {
-  const { credential_id } = req.params;
-
-  try {
-    // 測試所有可能的格式轉換
-    const formats = {
-      original: credential_id,
-
-      // 如果是 base64url，轉換為 base64
-      base64url_to_base64: (() => {
-        try {
-          return Buffer.from(credential_id, "base64url").toString("base64");
-        } catch (e) {
-          return `錯誤: ${e.message}`;
-        }
-      })(),
-
-      // 如果是 base64，轉換為 base64url
-      base64_to_base64url: (() => {
-        try {
-          return Buffer.from(credential_id, "base64").toString("base64url");
-        } catch (e) {
-          return `錯誤: ${e.message}`;
-        }
-      })(),
-
-      // 轉換為 hex 進行比對
-      to_hex: (() => {
-        try {
-          return Buffer.from(credential_id, "base64url").toString("hex");
-        } catch (e) {
-          try {
-            return Buffer.from(credential_id, "base64").toString("hex");
-          } catch (e2) {
-            return `錯誤: ${e2.message}`;
-          }
-        }
-      })(),
-    };
-
-    // 檢查是否與資料庫中的憑證匹配
-    const [dbCredentials] = await db.execute(
-      "SELECT credential_id, employee_id FROM fido_credentials"
-    );
-
-    const matches = dbCredentials.map((cred) => {
-      const dbHex = Buffer.from(cred.credential_id, "base64").toString("hex");
-      const inputHex = formats.to_hex;
-
-      return {
-        employee_id: cred.employee_id,
-        db_credential_id: cred.credential_id,
-        db_hex: dbHex,
-        matches: dbHex === inputHex,
-        base64_match: cred.credential_id === formats.base64url_to_base64,
-      };
-    });
-
-    res.json({
-      input_credential_id: credential_id,
-      format_conversions: formats,
-      database_matches: matches,
-      found_match: matches.some((m) => m.matches || m.base64_match),
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
     });
   }
 });

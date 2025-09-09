@@ -88,7 +88,7 @@ const HospitalLogin = () => {
           sessionStorage.setItem('loginTime', result.loginTime);
           
           // 直接跳轉到系統首頁
-          window.location.href = '/dashboard';
+          window.location.href = '/sss/homepage';
         }, 2000);
         
       } else {

@@ -4,6 +4,7 @@ import AddEmployeePage from './pages/admin/AddEmployeePage';
 import EmployeeVerification from './pages/register/EmployeeVerification';
 import FidoRegistration from './pages/register/FidoRegistration';
 import HospitalLogin from './pages/login/HospitalLogin';
+import Homepage from './pages/sss/Homepage'; 
 import NavigationPage from './pages/NavigationPage'; 
 
 import { useState } from 'react'
@@ -22,6 +23,9 @@ function App() {
         {/* <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} /> */}
         {/* 從註冊信件點擊進入的驗證頁面 */}
         <Route path="/register/:token" element={<EmployeeVerification />} />
+
+        {/* 主系統 */}
+        <Route path="/sss/homepage" element={<Homepage />} />
         
         {/* FIDO 註冊頁面 */}
         <Route path="/register/fido" element={<FidoRegistration />} />

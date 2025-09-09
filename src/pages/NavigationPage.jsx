@@ -12,6 +12,12 @@ const NavigationPage = () => {
       color: 'blue'
     },
     {
+      title: '🔐 主系統頁面',
+      description: '醫護人員使用手機生物識別登入',
+      path: '/sss/homepage',
+      color: 'blue'
+    },
+    {
       title: '👥 管理員後台',
       description: '員工管理和系統設定',
       path: '/admin',
