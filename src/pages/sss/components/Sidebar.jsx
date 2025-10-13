@@ -82,9 +82,7 @@ const Sidebar = () => {
   };
 
   const handleNavigation = (path) => {
-    // 這裡可以整合您的路由系統
     window.location.href = path;
-    // 例如: navigate(path) 或 window.location.href = path
   };
 
   return (
