@@ -1338,7 +1338,7 @@ app.use((err, req, res, next) => {
 });
 
 // 404 處理
-app.use("*", (req, res) => {
+app.use((req, res) => {
   res.status(404).json({
     success: false,
     error: "API 端點不存在",

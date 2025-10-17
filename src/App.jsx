@@ -4,7 +4,8 @@ import AddEmployeePage from './pages/admin/AddEmployeePage';
 import EmployeeVerification from './pages/register/EmployeeVerification';
 import FidoRegistration from './pages/register/FidoRegistration';
 import HospitalLogin from './pages/login/HospitalLogin';
-import Homepage from './pages/sss/Homepage'; 
+import Homepage from './pages/sss/homepage'; 
+import AddSchedulePage  from './pages/sss/AddSchedulePage'; 
 import NavigationPage from './pages/NavigationPage'; 
 
 import { useState } from 'react'
@@ -26,6 +27,8 @@ function App() {
 
         {/* 主系統 */}
         <Route path="/sss/homepage" element={<Homepage />} />
+        <Route path="/sss/add/schedule" element={<AddSchedulePage />} />
+
         
         {/* FIDO 註冊頁面 */}
         <Route path="/register/fido" element={<FidoRegistration />} />

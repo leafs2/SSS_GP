@@ -43,13 +43,13 @@ const Sidebar = () => {
       id: 'add-schedule',
       title: '新增排程',
       icon: Plus,
-      path: '/sss/scheduling/add'
+      path: '/sss/add/schedule'
     },
     {
       id: 'shift-planning',
       title: '排班規劃',
       icon: Users,
-      path: '/sss/scheduling/shifts'
+      path: '/sss/shift/planning'
     }
   ];
 
