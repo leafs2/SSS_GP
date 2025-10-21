@@ -16,14 +16,15 @@ import {
 } from 'lucide-react';
 
 const Sidebar = () => {
-  const [isOpen, setIsOpen] = useState(true);
-  const [openSubmenu, setOpenSubmenu] = useState(['personal', 'hospital']); // 改為陣列，預設展開所有子選單
+  const [isOpen, setIsOpen] = useState(false); // 預設關閉
+  const [openSubmenu, setOpenSubmenu] = useState([]);
 
   const menuItems = [
     {
       id: 'personal',
       title: '個人排程',
       icon: Calendar,
+      defaultPath: '/sss/homepage', // 點擊 ICON 時的預設跳轉頁面
       submenu: [
         { id: 'today-schedule', title: '今日手術安排', icon: Home, path: '/sss/homepage' },
         { id: 'tomorrow-schedule', title: '明日行程確認', icon: Clock, path: '/sss/personal/tomorrow' },
@@ -34,6 +35,7 @@ const Sidebar = () => {
       id: 'hospital',
       title: '全院手術概況',
       icon: Building2,
+      defaultPath: '/sss/hospital/rooms', // 點擊 ICON 時的預設跳轉頁面
       submenu: [
         { id: 'operating-room-status', title: '目前手術室使用情形', icon: Activity, path: '/sss/hospital/rooms' },
         { id: 'hospital-schedule', title: '預期手術行程', icon: BarChart3, path: '/sss/hospital/schedule' }
@@ -64,25 +66,33 @@ const Sidebar = () => {
     }
   };
 
-  const toggleSubmenu = (menuId) => {
-    if (!isOpen) return; // 側邊欄收合時不操作子選單
+  const toggleSubmenu = (item) => {
+    if (!isOpen) {
+      // 側邊欄收合時，點擊圖示直接跳轉到預設頁面
+      if (item.defaultPath) {
+        handleNavigation(item.defaultPath);
+      }
+      return;
+    }
     
     setOpenSubmenu(prev => {
-      // 確保 prev 是陣列
       const currentSubmenu = Array.isArray(prev) ? prev : [];
       
-      if (currentSubmenu.includes(menuId)) {
+      if (currentSubmenu.includes(item.id)) {
         // 如果已展開，則收合
-        return currentSubmenu.filter(id => id !== menuId);
+        return currentSubmenu.filter(id => id !== item.id);
       } else {
         // 如果未展開，則展開
-        return [...currentSubmenu, menuId];
+        return [...currentSubmenu, item.id];
       }
     });
   };
 
   const handleNavigation = (path) => {
+    // 跳轉頁面並關閉側邊欄
     window.location.href = path;
+    setIsOpen(false);
+    setOpenSubmenu([]);
   };
 
   return (
@@ -136,7 +146,7 @@ const Sidebar = () => {
                   {item.submenu ? (
                     // 有子選單的項目
                     <button
-                      onClick={() => toggleSubmenu(item.id)}
+                      onClick={() => toggleSubmenu(item)}
                       className={`
                         w-full flex items-center justify-between p-3 rounded-lg text-left
                         transition-all duration-200 group

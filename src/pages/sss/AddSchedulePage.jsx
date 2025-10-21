@@ -15,6 +15,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import Layout from './components/Layout';
+import PageHeader from './components/PageHeader';
 
 const AddSchedulePage = () => {
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -189,9 +190,15 @@ const AddSchedulePage = () => {
 
   return (
     <Layout>
-    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
-      {/* 主要內容區 - 使用固定高度 */}
-      <div className="flex-1 flex gap-5 p-4 min-h-0 justify-end">
+      <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+      {/* 使用 PageHeader 組件 */}
+      <PageHeader 
+        title="新增手術排程" 
+        subtitle="選擇日期並填寫手術資訊"
+      />
+
+      {/* 主要內容區 - 使用 flex-1 填滿剩餘空間 */}
+      <div className="flex-1 flex gap-5 p-4 min-h-0">
         {/* 左側日曆區域 */}
         <div className="w-[650px] flex flex-col bg-white rounded-lg shadow-md p-4 min-h-0 mx-auto">
           {/* 日曆標題 */}
@@ -228,7 +235,7 @@ const AddSchedulePage = () => {
             </div>
             
             {/* 日期格子容器 */}
-            <div className="flex-1 grid grid-cols-7 gap-1 content-start">
+            <div className="flex-1 grid grid-cols-7 gap-1 content-start overflow-y-auto">
               {calendarDays.map((date, index) => {
                 if (!date) {
                   return <div key={`empty-${index}`} className="aspect-square" />;
@@ -278,7 +285,7 @@ const AddSchedulePage = () => {
 
           {/* 已選擇日期顯示 */}
           {selectedDate && (
-            <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg flex-shrink-0">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-blue-600" />
@@ -303,11 +310,11 @@ const AddSchedulePage = () => {
         <div className="w-96 bg-white rounded-lg shadow-md p-4 flex flex-col min-h-0">
           <h2 className="text-lg font-bold text-gray-800 mb-3">手術資訊</h2>
 
-          {/* 表單內容 - 使用 flex-1 和 overflow */}
-          <div className="flex-1 space-y-3 overflow-y-auto min-h-0">
+          {/* 表單內容 - 改為不需滾動 */}
+          <div className="space-y-5">
             {/* 病患查詢 */}
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
+              <label className="block text-xs font-medium text-gray-700 mb-1 text-left">
                 病患病歷號 <span className="text-red-500">*</span>
               </label>
               <div className="flex gap-1">
@@ -316,7 +323,7 @@ const AddSchedulePage = () => {
                   value={formData.patientId}
                   onChange={(e) => setFormData({...formData, patientId: e.target.value})}
                   placeholder="請輸入病歷號"
-                  className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-left"
                 />
                 <button
                   onClick={handlePatientSearch}
@@ -340,7 +347,7 @@ const AddSchedulePage = () => {
 
             {/* 助手醫師 */}
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
+              <label className="block text-xs font-medium text-gray-700 mb-1 text-left">
                 助手醫師 <span className="text-red-500">*</span>
               </label>
               <div className="relative">
@@ -350,14 +357,14 @@ const AddSchedulePage = () => {
                   value={formData.assistantDoctor}
                   onChange={(e) => setFormData({...formData, assistantDoctor: e.target.value})}
                   placeholder="請輸入助手醫師姓名"
-                  className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-left"
                 />
               </div>
             </div>
 
             {/* 手術類型 */}
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
+              <label className="block text-xs font-medium text-gray-700 mb-1 text-left">
                 手術類型 <span className="text-red-500">*</span>
               </label>
               <div className="relative">
@@ -365,7 +372,7 @@ const AddSchedulePage = () => {
                 <select
                   value={formData.surgeryType}
                   onChange={(e) => setFormData({...formData, surgeryType: e.target.value})}
-                  className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent appearance-none"
+                  className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent appearance-none text-left"
                 >
                   <option value="">請選擇手術類型</option>
                   {surgeryTypes.map(type => (
@@ -375,28 +382,49 @@ const AddSchedulePage = () => {
               </div>
             </div>
 
-            {/* 預估時間 */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                預估手術時間（小時）<span className="text-red-500">*</span>
-              </label>
-              <div className="relative">
-                <Clock className="absolute left-2 top-1/2 transform -translate-y-1/2 w-3 h-3 text-gray-400" />
-                <input
-                  type="number"
-                  value={formData.estimatedHours}
-                  onChange={(e) => setFormData({...formData, estimatedHours: e.target.value})}
-                  placeholder="例如：2.5"
-                  step="0.5"
-                  min="0.5"
-                  className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+            {/* 預估時間 和 護士人數 - 合併成一排 */}
+            <div className="grid grid-cols-2 gap-2">
+              {/* 預估時間 */}
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1 text-left">
+                  預估時間（小時）<span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <Clock className="absolute left-2 top-1/2 transform -translate-y-1/2 w-3 h-3 text-gray-400" />
+                  <input
+                    type="number"
+                    value={formData.estimatedHours}
+                    onChange={(e) => setFormData({...formData, estimatedHours: e.target.value})}
+                    placeholder="2.5"
+                    step="0.5"
+                    min="0.5"
+                    className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-left"
+                  />
+                </div>
+              </div>
+
+              {/* 護士人數 */}
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1 text-left">
+                  護士人數 <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <UserPlus className="absolute left-2 top-1/2 transform -translate-y-1/2 w-3 h-3 text-gray-400" />
+                  <input
+                    type="number"
+                    value={formData.nurseCount}
+                    onChange={(e) => setFormData({...formData, nurseCount: e.target.value})}
+                    placeholder="人數"
+                    min="1"
+                    className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-left"
+                  />
+                </div>
               </div>
             </div>
 
             {/* 手術室類型 */}
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
+              <label className="block text-xs font-medium text-gray-700 mb-1 text-left">
                 手術室類型 <span className="text-red-500">*</span>
               </label>
               <div className="relative">
@@ -404,7 +432,7 @@ const AddSchedulePage = () => {
                 <select
                   value={formData.roomType}
                   onChange={(e) => setFormData({...formData, roomType: e.target.value})}
-                  className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent appearance-none"
+                  className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent appearance-none text-left"
                 >
                   <option value="">請選擇手術室類型</option>
                   {roomTypes.map(type => (
@@ -413,28 +441,10 @@ const AddSchedulePage = () => {
                 </select>
               </div>
             </div>
-
-            {/* 護士人數 */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                所需護士人數 <span className="text-red-500">*</span>
-              </label>
-              <div className="relative">
-                <UserPlus className="absolute left-2 top-1/2 transform -translate-y-1/2 w-3 h-3 text-gray-400" />
-                <input
-                  type="number"
-                  value={formData.nurseCount}
-                  onChange={(e) => setFormData({...formData, nurseCount: e.target.value})}
-                  placeholder="請輸入人數"
-                  min="1"
-                  className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-            </div>
           </div>
 
           {/* 操作按鈕 - 固定在底部 */}
-          <div className="space-y-2 mt-3 pt-3 border-t border-gray-200">
+          <div className="space-y-2 mt-auto pt-3 border-t border-gray-200">
             <button
               onClick={handleRecommendDate}
               disabled={!validateForm()}
