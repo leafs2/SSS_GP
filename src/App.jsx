@@ -6,8 +6,8 @@ import FidoRegistration from './pages/register/FidoRegistration';
 import HospitalLogin from './pages/login/HospitalLogin';
 import Homepage from './pages/sss/homepage'; 
 import AddSchedulePage  from './pages/sss/AddSchedulePage'; 
+import ShiftPlanningPage  from './pages/sss/ShiftPlanningPage'; 
 import NavigationPage from './pages/NavigationPage'; 
-
 import { useState } from 'react'
 import './App.css'
 
@@ -28,7 +28,7 @@ function App() {
         {/* 主系統 */}
         <Route path="/sss/homepage" element={<Homepage />} />
         <Route path="/sss/add/schedule" element={<AddSchedulePage />} />
-
+        <Route path="/sss/shift/planning" element={<ShiftPlanningPage />} />
         
         {/* FIDO 註冊頁面 */}
         <Route path="/register/fido" element={<FidoRegistration />} />
