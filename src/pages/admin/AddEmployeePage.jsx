@@ -1,453 +1,486 @@
-import React, { useState } from 'react';
-import { 
-  Activity, 
-  Clock, 
-  ChevronLeft, 
-  ChevronRight,
-  Calendar,
-  Users,
-  AlertCircle
-} from 'lucide-react';
-import Layout from './components/Layout';
-import PageHeader from './components/PageHeader';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
-const OperatingRoomStatus = () => {
-  const [selectedCategory, setSelectedCategory] = useState('surgery');
-  const [currentDate] = useState(new Date());
-  const [currentPage, setCurrentPage] = useState(0); // 新增：當前頁碼
+// 科別選項
+const departments = [
+  { code: 'CV', name: '心臟外科' },
+  { code: 'NS', name: '神經外科' },
+  { code: 'GS', name: '一般外科' },
+  { code: 'OR', name: '骨科' },
+  { code: 'UR', name: '泌尿科' },
+  { code: 'OB', name: '婦產科' },
+  { code: 'OP', name: '眼科' },
+  { code: 'ENT', name: '耳鼻喉科' },
+  { code: 'TS', name: '胸腔外科' },
+  { code: 'PS', name: '整形外科' },
+  { code: 'AN', name: '麻醉科' }
+];
 
-  // 每頁顯示的手術室數量
-  const ROOMS_PER_PAGE = 4;
-
-  // 手術室類別定義
-  const categories = [
-    { 
-      id: 'surgery', 
-      name: '外科', 
-      total: 10,
-      rooms: ['S01', 'S02', 'S03', 'S04', 'S05', 'S06', 'S07', 'S08', 'S09', 'S10'],
-      subtitle: '心臟外科、神經外科、一般外科、胸腔外科、整形外科、骨科'
-    },
-    { 
-      id: 'specialty', 
-      name: '專科', 
-      total: 8,
-      rooms: ['P01', 'P02', 'P03', 'P04', 'P05', 'P06', 'P07', 'P08'],
-      subtitle: '婦產科、泌尿科、眼科、耳鼻喉科'
-    },
-    { 
-      id: 'emergency', 
-      name: '急診用', 
-      total: 3,
-      rooms: ['E01', 'E02', 'E03'],
-      subtitle: '急診專用手術室'
-    },
-    { 
-      id: 'davinci', 
-      name: '達文西', 
-      total: 4,
-      rooms: ['D01', 'D02', 'D03', 'D04'],
-      subtitle: '達文西機器人手術系統'
-    }
-  ];
-
-  // 模擬手術數據
-  const generateMockSurgeries = (roomId) => {
-    const surgeries = [];
-    const surgeryTypes = [
-      { name: '心臟瓣膜置換術', duration: 240, doctor: '陳醫師' },
-      { name: '腹腔鏡膽囊切除術', duration: 120, doctor: '林醫師' },
-      { name: '脊椎融合手術', duration: 180, doctor: '王醫師' },
-      { name: '全膝關節置換術', duration: 150, doctor: '張醫師' },
-      { name: '甲狀腺切除術', duration: 90, doctor: '李醫師' },
-      { name: '子宮肌瘤切除術', duration: 120, doctor: '黃醫師' },
-      { name: '白內障手術', duration: 60, doctor: '周醫師' },
-      { name: '鼻竇內視鏡手術', duration: 90, doctor: '吳醫師' }
-    ];
-
-    // 隨機生成 1-3 個手術
-    const numSurgeries = Math.floor(Math.random() * 4);
-    let currentTime = 8; // 從早上 8 點開始
-
-    for (let i = 0; i < numSurgeries; i++) {
-      const surgery = surgeryTypes[Math.floor(Math.random() * surgeryTypes.length)];
-      const startHour = currentTime;
-      const startMinute = Math.random() > 0.5 ? 0 : 30;
-      const endHour = startHour + Math.floor(surgery.duration / 60);
-      const endMinute = (startMinute + (surgery.duration % 60)) % 60;
-      
-      const now = new Date();
-      const surgeryStart = new Date(now);
-      surgeryStart.setHours(startHour, startMinute, 0);
-      const surgeryEnd = new Date(now);
-      surgeryEnd.setHours(endHour, endMinute, 0);
-
-      // 判斷手術狀態
-      let status = 'scheduled';
-      if (now >= surgeryStart && now <= surgeryEnd) {
-        status = 'ongoing';
-      } else if (now > surgeryEnd) {
-        status = 'completed';
-      }
-
-      surgeries.push({
-        id: `${roomId}-${i}`,
-        name: surgery.name,
-        doctor: surgery.doctor,
-        patient: `病患${Math.floor(Math.random() * 1000)}`,
-        startTime: `${String(startHour).padStart(2, '0')}:${String(startMinute).padStart(2, '0')}`,
-        endTime: `${String(endHour).padStart(2, '0')}:${String(endMinute).padStart(2, '0')}`,
-        duration: surgery.duration,
-        status: status,
-        top: (startHour - 6) * 80 + (startMinute / 60) * 80, // 計算位置（從早上6點開始）
-        height: (surgery.duration / 60) * 80 // 每小時 80px
-      });
-
-      currentTime = endHour + (endMinute > 0 ? 1 : 0);
-      if (currentTime >= 18) break; // 最晚到晚上6點
-    }
-
-    return surgeries;
-  };
-
-  // 生成所有手術室的數據
-  const [roomsData] = useState(() => {
-    const data = {};
-    categories.forEach(category => {
-      data[category.id] = category.rooms.map(roomId => ({
-        id: roomId,
-        surgeries: generateMockSurgeries(roomId)
-      }));
-    });
-    return data;
+function AddEmployeePage({ onBack, onSuccess }) {
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    department_code: '',
+    role: 'D',
+    permission: '1'
   });
+  const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [errors, setErrors] = useState({});
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const navigate = useNavigate();
 
-  // 計算統計數據
-  const calculateStats = () => {
-    const currentCategory = roomsData[selectedCategory] || [];
-    let ongoingCount = 0;
-    let completedCount = 0;
-    let totalCount = 0;
-    let roomsInUse = 0;
+  // 當選項改變時更新預覽
+  useEffect(() => {
+    if (formData.department_code && formData.role && formData.permission) {
+      generatePreview();
+    } else {
+      setPreview(null);
+    }
+  }, [formData.department_code, formData.role, formData.permission]);
 
-    currentCategory.forEach(room => {
-      let hasOngoingSurgery = false;
-      room.surgeries.forEach(surgery => {
-        totalCount++;
-        if (surgery.status === 'ongoing') {
-          ongoingCount++;
-          hasOngoingSurgery = true;
-        }
-        if (surgery.status === 'completed') {
-          completedCount++;
-        }
+  const generatePreview = async () => {
+    try {
+      const response = await fetch('http://localhost:3001/api/generate-employee-id', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          department_code: formData.department_code,
+          role: formData.role,
+          permission: formData.permission
+        })
       });
-      if (hasOngoingSurgery) {
-        roomsInUse++;
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setPreview(data.employee_id);
+      } else {
+        console.error('生成員工編號失敗:', data.error);
+        setPreview('錯誤');
       }
-    });
-
-    const totalRooms = currentCategory.length;
-    const usageRate = totalRooms > 0 ? Math.round((roomsInUse / totalRooms) * 100) : 0;
-
-    return { ongoingCount, completedCount, totalCount, usageRate };
-  };
-
-  const stats = calculateStats();
-  const currentCategory = categories.find(c => c.id === selectedCategory);
-  const currentRooms = roomsData[selectedCategory] || [];
-
-  // 分頁計算
-  const totalPages = Math.ceil(currentRooms.length / ROOMS_PER_PAGE);
-  const startIndex = currentPage * ROOMS_PER_PAGE;
-  const endIndex = startIndex + ROOMS_PER_PAGE;
-  const displayedRooms = currentRooms.slice(startIndex, endIndex);
-
-  // 切換分頁時重置到第一頁
-  const handleCategoryChange = (categoryId) => {
-    setSelectedCategory(categoryId);
-    setCurrentPage(0);
-  };
-
-  // 處理分頁切換
-  const handlePageChange = (pageIndex) => {
-    setCurrentPage(pageIndex);
-  };
-
-  // 時間軸（6:00 - 22:00）
-  const timeSlots = Array.from({ length: 17 }, (_, i) => i + 6);
-
-  // 獲取手術狀態樣式
-  const getSurgeryStatusStyle = (status) => {
-    switch (status) {
-      case 'ongoing':
-        return 'bg-green-100 border-green-500 text-green-900';
-      case 'completed':
-        return 'bg-gray-100 border-gray-400 text-gray-600';
-      case 'scheduled':
-        return 'bg-blue-100 border-blue-500 text-blue-900';
-      default:
-        return 'bg-gray-100 border-gray-400 text-gray-600';
+    } catch (error) {
+      console.error('生成員工編號失敗:', error);
+      setPreview('網路錯誤');
     }
   };
+
+  const validateForm = () => {
+    const newErrors = {};
+
+    if (!formData.name.trim()) newErrors.name = '請輸入姓名';
+    if (!formData.email.trim()) newErrors.email = '請輸入電子信箱';
+    else if (!/\S+@\S+\.\S+/.test(formData.email)) newErrors.email = '電子信箱格式不正確';
+    if (!formData.department_code) newErrors.department_code = '請選擇科別';
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handlePreSubmit = () => {
+    if (validateForm()) {
+      setShowConfirmModal(true);
+    }
+  };
+
+  const handleBack = () => {
+    navigate('/admin');
+  };
+
+  const handleSuccess = () => {
+    navigate('/admin');
+  };
+
+  const handleConfirmSubmit = async () => {
+    setLoading(true);
+
+    try {
+      const response = await fetch('http://localhost:3001/api/employees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData)
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setShowConfirmModal(false);
+        
+        if (data.data.emailError) {
+          alert(`🎉 員工新增成功！\n\n👤 員工編號：${data.data.employee_id}\n📧 註冊信箱：${formData.email}\n\n⚠️ 但邀請信件發送失敗：${data.data.emailError}\n\n請稍後從員工管理頁面重新發送邀請。`);
+        } else {
+          alert(`🎉 員工新增成功！\n\n👤 員工編號：${data.data.employee_id}\n📧 註冊信箱：${formData.email}\n✅ 註冊邀請已自動發送\n\n員工將收到包含 FIDO 註冊連結的邀請信件。`);
+        }
+        
+        // 成功後導向管理頁面
+        setTimeout(() => {
+          window.location.href = '/admin';
+        }, 3000);
+        
+      } else {
+        alert('❌ 新增失敗：' + data.error);
+      }
+    } catch (error) {
+      console.error('新增員工失敗:', error);
+      alert('❌ 新增失敗：無法連接到伺服器');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleChange = (field, value) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    // 清除該欄位的錯誤
+    if (errors[field]) {
+      setErrors(prev => ({ ...prev, [field]: '' }));
+    }
+  };
+
+  const ConfirmModal = () => (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4">
+        <div className="p-6 border-b">
+          <h3 className="text-xl font-semibold text-gray-900">資料確認</h3>
+          <p className="text-gray-600 mt-1">請確認以下資訊是否正確</p>
+        </div>
+
+        <div className="p-6">
+          <div className="space-y-4">
+            <div className="flex">
+              <span className="text-gray-600 w-24 text-left">姓名：</span>
+              <span className="font-medium">{formData.name}</span>
+            </div>
+            <div className="flex">
+              <span className="text-gray-600 w-24 text-left">電子信箱：</span>
+              <span className="font-medium">{formData.email}</span>
+            </div>
+            <div className="flex">
+              <span className="text-gray-600 w-24 text-left">科別：</span>
+              <span className="font-medium">
+                {departments.find(d => d.code === formData.department_code)?.name}
+              </span>
+            </div>
+            <div className="flex">
+              <span className="text-gray-600 w-24 text-left">職位：</span>
+              <span className="font-medium">{formData.role === 'D' ? '醫師' : '護理人員'}</span>
+            </div>
+            <div className="flex">
+              <span className="text-gray-600 w-24 text-left">系統權限：</span>
+              <span className="font-medium">
+                {formData.permission === '1' ? '可修改手術排程' : '僅可查看手術排程'}
+              </span>
+            </div>
+            <div className="flex border-t pt-4">
+              <span className="text-gray-600 w-24 text-left">員工編號：</span>
+              <span className="font-mono font-bold text-blue-600 text-left">{preview}</span>
+            </div>
+          </div>
+
+          <div className="bg-yellow-50 p-4 rounded-lg mt-6">
+            <div className="flex items-start">
+              <svg className="w-5 h-5 text-yellow-600 mr-2 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+              </svg>
+              <div>
+                <h4 className="font-medium text-yellow-800 text-left">重要提醒</h4>
+                <p className="text-sm text-yellow-700 mt-1 text-left">
+                  確認新增後，系統將自動發送註冊邀請信件至指定信箱，
+                </p>
+                <p className="text-sm text-yellow-700 mt-1 text-left">
+                  員工需完成 FIDO 註冊後方可使用系統。
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 border-t flex justify-end space-x-3">
+          <button
+            onClick={() => setShowConfirmModal(false)}
+            className="px-6 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+            disabled={loading}
+          >
+            取消
+          </button>
+          <button
+            onClick={handleConfirmSubmit}
+            disabled={loading}
+            className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center"
+          >
+            {loading && (
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+            )}
+            {loading ? '新增中...' : '確認新增'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
-    <Layout>
-      <div className="min-h-full bg-gray-50">
-        {/* 頂部標題欄 */}
-        <PageHeader 
-          title="手術室使用情形" 
-          subtitle="外科部門"
-        />
-
-        {/* 主要內容區域 */}
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 overflow-x-auto">
-          {/* 類別切換區域 */}
-          <div className="bg-white rounded-lg shadow-md mb-4 p-4">
-          <div className="flex items-center justify-between mb-3">
-            {/* 類別切換按鈕 */}
-            <div className="flex gap-2">
-              {categories.map((category) => (
-                <button
-                  key={category.id}
-                  onClick={() => handleCategoryChange(category.id)}
-                  className={`
-                    px-6 py-3 rounded-lg font-medium transition-all duration-200 
-                    ${selectedCategory === category.id 
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-200' 
-                      : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
-                    }
-                  `}
-                >
-                  <div className="flex items-center gap-2">
-                    <span>{category.name}</span>
-                    <span className={`
-                      text-xs px-2 py-0.5 rounded-full
-                      ${selectedCategory === category.id 
-                        ? 'bg-blue-500 text-white' 
-                        : 'bg-gray-200 text-gray-600'
-                      }
-                    `}>
-                      {category.total}間
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-
-            {/* 統計資訊 - 放在類別按鈕右側 */}
-            <div className="flex gap-3">
-              <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2">
-                <div className="flex items-center gap-2 mb-1">
-                  <Activity className="w-4 h-4 text-green-600" />
-                  <span className="text-xs font-medium text-green-700">進行中</span>
-                </div>
-                <div className="text-2xl font-bold text-green-700">{stats.ongoingCount}</div>
-              </div>
-
-              <div className="bg-purple-50 border border-purple-200 rounded-lg px-4 py-2">
-                <div className="flex items-center gap-2 mb-1">
-                  <Activity className="w-4 h-4 text-purple-600" />
-                  <span className="text-xs font-medium text-purple-700">使用率</span>
-                </div>
-                <div className="text-2xl font-bold text-purple-700">{stats.usageRate}%</div>
-              </div>
-
-              <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2">
-                <div className="flex items-center gap-2 mb-1">
-                  <Calendar className="w-4 h-4 text-blue-600" />
-                  <span className="text-xs font-medium text-blue-700">今日總量</span>
-                </div>
-                <div className="text-2xl font-bold text-blue-700">{stats.totalCount}</div>
-              </div>
-
-              <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2">
-                <div className="flex items-center gap-2 mb-1">
-                  <Clock className="w-4 h-4 text-gray-600" />
-                  <span className="text-xs font-medium text-gray-700">已完成</span>
-                </div>
-                <div className="text-2xl font-bold text-gray-700">{stats.completedCount}</div>
-              </div>
-            </div>
-          </div>
-
-          {/* 類別說明 */}
-          <div className="text-sm text-gray-600 flex items-center gap-2">
-            <AlertCircle className="w-4 h-4" />
-            <span>{currentCategory?.subtitle}</span>
-          </div>
+    <div className="min-h-screen w-full bg-gray-50">
+      <div className="max-w-7xl mx-auto p-6">
+        {/* 頂部導航 */}
+        <div className="flex items-center mb-8">
+          <button
+            onClick={handleBack}
+            className="flex items-center text-gray-600 hover:text-gray-900"
+          >
+            <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            回到員工管理
+          </button>
         </div>
 
-        {/* 手術室排程表容器 */}
-        <div className="bg-white rounded-lg shadow-md">
-          {/* 分頁控制器 - 改為前後切換按鈕 */}
-          {totalPages > 1 && (
-            <div className="border-b border-gray-200 px-6 py-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm text-gray-600">
-                  顯示第 {startIndex + 1}-{Math.min(endIndex, currentRooms.length)} 間手術室（共 {currentRooms.length} 間）
-                </div>
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => handlePageChange(currentPage - 1)}
-                    disabled={currentPage === 0}
-                    className={`
-                      flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200
-                      ${currentPage === 0
-                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                        : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md'
-                      }
-                    `}
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                    上一頁
-                  </button>
+        {/* 主要內容 */}
+        <div className="bg-white rounded-lg shadow-sm">
+          <div className="p-8">
+            <h1 className="text-3xl font-bold text-center text-gray-900 mb-8">新增員工</h1>
+            
+            {/* 三欄式佈局 */}
+            <div className="grid grid-cols-3 gap-8 items-stretch">
+              {/* 左欄 */}
+              <div className="space-y-6">
+                {/* 基本資料區塊 */}
+                <div className="border rounded-lg p-6 min-h-[320px]">
+                  <h2 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                    <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center mr-3 text-sm font-bold">1</div>
+                    基本資料
+                  </h2>
                   
-                  <span className="text-sm font-medium text-gray-700">
-                    {currentPage + 1} / {totalPages}
-                  </span>
-                  
-                  <button
-                    onClick={() => handlePageChange(currentPage + 1)}
-                    disabled={currentPage === totalPages - 1}
-                    className={`
-                      flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200
-                      ${currentPage === totalPages - 1
-                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                        : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md'
-                      }
-                    `}
-                  >
-                    下一頁
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 手術室排程表 */}
-          <div className="p-6">
-          <div className="flex gap-4 justify-center">
-            {/* 時間軸 */}
-            <div className="flex-shrink-0">
-              <div className="h-16 flex items-center justify-center font-semibold text-gray-700 border-b-2 border-gray-300 bg-gray-50 rounded-t-lg px-4">
-                時間
-              </div>
-              <div className="relative">
-                {timeSlots.map((hour) => (
-                  <div 
-                    key={hour} 
-                    className="h-20 flex items-start justify-end pr-3 text-sm font-medium text-gray-600 border-b border-gray-200"
-                  >
-                    {String(hour).padStart(2, '0')}:00
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* 手術室列 */}
-            {displayedRooms.map((room) => (
-              <div key={room.id} className="flex-shrink-0 w-64">
-                {/* 手術室標題 */}
-                <div className={`h-16 border-2 border-gray-300 rounded-t-lg flex flex-col items-center justify-center shadow-sm transition-colors ${
-                  room.surgeries.filter(s => s.status === 'ongoing').length > 0 
-                    ? 'bg-green-100 border-green-400' 
-                    : 'bg-white'
-                }`}>
-                  <div className="font-bold text-lg text-gray-900">{room.id}</div>
-                  <div className="text-xs text-gray-500">
-                    {room.surgeries.filter(s => s.status === 'ongoing').length > 0 ? (
-                      <span className="flex items-center gap-1 text-green-600 font-medium">
-                        <Activity className="w-3 h-3" />
-                        使用中
-                      </span>
-                    ) : (
-                      <span className="text-gray-400">空閒</span>
-                    )}
-                  </div>
-                </div>
-
-                {/* 手術時間軸 */}
-                <div className="relative bg-white border-l-2 border-r-2 border-b-2 border-gray-300 rounded-b-lg">
-                  {/* 時間格線 */}
-                  {timeSlots.map((hour, index) => (
-                    <div 
-                      key={hour}
-                      className={`h-20 border-b ${index === timeSlots.length - 1 ? 'border-b-0' : 'border-gray-200'}`}
-                    />
-                  ))}
-
-                  {/* 手術卡片 */}
-                  {room.surgeries.map((surgery) => (
-                    <div
-                      key={surgery.id}
-                      className={`
-                        absolute left-1 right-1 rounded-lg border-l-4 p-3 shadow-md
-                        transition-all duration-200 hover:shadow-lg hover:scale-[1.02]
-                        ${getSurgeryStatusStyle(surgery.status)}
-                      `}
-                      style={{
-                        top: `${surgery.top}px`,
-                        height: `${surgery.height}px`,
-                        minHeight: '60px'
-                      }}
-                    >
-                      <div className="flex items-start justify-between mb-1">
-                        <div className="text-xs font-semibold">
-                          {surgery.startTime} - {surgery.endTime}
-                        </div>
-                        {surgery.status === 'ongoing' && (
-                          <span className="flex items-center gap-1 text-xs bg-green-200 text-green-800 px-2 py-0.5 rounded-full">
-                            <Activity className="w-3 h-3" />
-                            進行中
-                          </span>
-                        )}
-                      </div>
-                      
-                      <div className="font-semibold text-sm mb-1 line-clamp-2">
-                        {surgery.name}
-                      </div>
-                      
-                      <div className="flex items-center gap-2 text-xs">
-                        <Users className="w-3 h-3" />
-                        <span>{surgery.doctor}</span>
-                      </div>
-                      
-                      <div className="text-xs text-gray-600 mt-1">
-                        {surgery.patient} • {surgery.duration}分鐘
-                      </div>
+                  <div className="space-y-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2 text-left">
+                        姓名 <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.name}
+                        onChange={(e) => handleChange('name', e.target.value)}
+                        className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          errors.name ? 'border-red-500' : 'border-gray-300'
+                        }`}
+                        placeholder="請輸入完整姓名"
+                      />
+                      {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
                     </div>
-                  ))}
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2 text-left">
+                        電子信箱 <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="email"
+                        value={formData.email}
+                        onChange={(e) => handleChange('email', e.target.value)}
+                        className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          errors.email ? 'border-red-500' : 'border-gray-300'
+                        }`}
+                        placeholder="example@hospital.com"
+                      />
+                      {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email}</p>}
+                    </div>
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
 
-          {/* 底部圖例 */}
-          <div className="border-t border-gray-200 px-6 py-3">
-            <div className="flex items-center gap-6 text-sm">
-              <span className="font-medium text-gray-700">狀態圖例：</span>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 bg-green-100 border-l-4 border-green-500 rounded"></div>
-                <span className="text-gray-600">進行中</span>
+              {/* 中欄 */}
+              <div className="space-y-6">
+                {/* 部門設定區塊 */}
+                <div className="border rounded-lg p-6 min-h-[320px]">
+                  <h2 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                    <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center mr-3 text-sm font-bold">2</div>
+                    部門設定
+                  </h2>
+                  
+                  <div className="space-y-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2 text-left">
+                        科別 <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={formData.department_code}
+                        onChange={(e) => handleChange('department_code', e.target.value)}
+                        className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          errors.department_code ? 'border-red-500' : 'border-gray-300'
+                        }`}
+                      >
+                        <option value="">請選擇科別</option>
+                        {departments.map(dept => (
+                          <option key={dept.code} value={dept.code}>
+                            {dept.name} ({dept.code})
+                          </option>
+                        ))}
+                      </select>
+                      {errors.department_code && <p className="text-red-500 text-sm mt-1">{errors.department_code}</p>}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2 text-left">
+                        職位 <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={formData.role}
+                        onChange={(e) => handleChange('role', e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="D">醫師</option>
+                        <option value="N">護理人員</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 bg-blue-100 border-l-4 border-blue-500 rounded"></div>
-                <span className="text-gray-600">已排程</span>
+
+              {/* 右欄 */}
+              <div className="space-y-6">
+                {/* 權限設定區塊 */}
+                <div className="border rounded-lg p-6 min-h-[320px]">
+                  <h2 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                    <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center mr-3 text-sm font-bold">3</div>
+                    權限設定
+                  </h2>
+                  
+                  <div className="space-y-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-3 text-left">
+                      系統權限 <span className="text-red-500">*</span>
+                    </label>
+                    
+                    <div className="space-y-3">
+                      <label className="flex items-start p-4 border rounded-lg cursor-pointer hover:bg-gray-50">
+                        <input
+                          type="radio"
+                          name="permission"
+                          value="1"
+                          checked={formData.permission === '1'}
+                          onChange={(e) => handleChange('permission', e.target.value)}
+                          className="mt-1 mr-3"
+                        />
+                        <div>
+                          <div className="font-medium text-gray-900 text-left">可修改手術排程</div>
+                          <div className="text-sm text-gray-500 mt-1">
+                            可查看、新增、修改和刪除手術排程資料
+                          </div>
+                        </div>
+                      </label>
+
+                      <label className="flex items-start p-4 border rounded-lg cursor-pointer hover:bg-gray-50">
+                        <input
+                          type="radio"
+                          name="permission"
+                          value="0"
+                          checked={formData.permission === '0'}
+                          onChange={(e) => handleChange('permission', e.target.value)}
+                          className="mt-1 mr-3"
+                        />
+                        <div>
+                          <div className="font-medium text-gray-900 text-left">僅可查看手術排程</div>
+                          <div className="text-sm text-gray-500 mt-1">
+                            只能查看手術排程資料，無法進行修改
+                          </div>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 bg-gray-100 border-l-4 border-gray-400 rounded"></div>
-                <span className="text-gray-600">已完成</span>
-              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-8 pt-8">
+              {/* 員工編號預覽區塊 */}
+                <div className="border rounded-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <svg className="w-5 h-5 text-blue-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                    員工編號預覽
+                  </h3>
+                  
+                  {formData.department_code && formData.role && formData.permission ? (
+                    <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+                      <div className="flex items-center mb-2">
+                        <svg className="w-5 h-5 text-green-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span className="font-medium text-green-900">生成的員工編號</span>
+                      </div>
+                      <div className="text-xl font-mono font-bold text-green-700 bg-white px-3 py-2 rounded border mb-3">
+                        {preview || '生成中...'}
+                      </div>
+                      <p className="text-sm text-green-600">
+                        格式：{formData.role === 'D' ? '醫師' : '護理人員'} + {formData.department_code} + 權限等級 + 流水號
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                      <div className="flex items-center mb-2">
+                        <svg className="w-5 h-5 text-gray-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span className="font-medium text-gray-600">等待生成</span>
+                      </div>
+                      <p className="text-sm text-gray-500">
+                        請選擇科別、角色和權限後，系統將自動生成員工編號
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* 注意事項 */}
+                <div className="bg-blue-50 p-6 rounded-lg">
+                  <h3 className="font-medium text-blue-900 mb-3 flex items-center">
+                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    注意事項
+                  </h3>
+                  <ul className="text-sm text-blue-800 space-y-4">
+                    <li className="flex items-start">
+                    </li>
+                    <li className="flex items-start">
+                      <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-2 mr-3 flex-shrink-0"></span>
+                      電子信箱將用於發送註冊邀請信件
+                    </li>
+                    <li className="flex items-start">
+                      <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-2 mr-3 flex-shrink-0"></span>
+                      請確認信箱地址正確，避免邀請信件無法送達
+                    </li>
+                    <li className="flex items-start">
+                      <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-2 mr-3 flex-shrink-0"></span>
+                      員工需要完成身分驗證註冊後才能使用系統
+                    </li>
+                    <li className="flex items-start">
+                      <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-2 mr-3 flex-shrink-0"></span>
+                      員工編號一旦生成將無法修改
+                    </li>
+                  </ul>
+                </div>
+            </div>
+            {/* 提交按鈕 */}
+            <div className="flex justify-end space-x-3 pt-8 mt-8 border-t">
+              <button
+                onClick={onBack}
+                className="px-8 py-3 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handlePreSubmit}
+                className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+              >
+                新增員工
+              </button>
             </div>
           </div>
         </div>
-        </div>
-        </main>
-      </div>
-    </Layout>
-  );
-};
 
-export default OperatingRoomStatus;
+        {/* 確認彈窗 */}
+        {showConfirmModal && <ConfirmModal />}
+      </div>
+    </div>
+  );
+}
+
+export default AddEmployeePage;
