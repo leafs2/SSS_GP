@@ -3,6 +3,9 @@ import cors from "cors";
 import dotenv from "dotenv";
 import pkg from "pg";
 const { Pool } = pkg;
+import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
+import cron from "node-cron";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
@@ -12,6 +15,8 @@ import departmentsRouter, {
   setPool as setDepartmentsPool,
 } from "./departments.js";
 import authRouter, { setPool as setAuthPool } from "./auth.js";
+import sessionRouter, { setPool as setSessionPool } from "./session.js";
+import devLoginRouter, { setPool as setDevLoginPool } from "./devLogin.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -34,10 +39,36 @@ pool
 setEmployeesPool(pool);
 setDepartmentsPool(pool);
 setAuthPool(pool);
+setSessionPool(pool);
+setDevLoginPool(pool);
 
 const app = express();
 
-// 中介軟體
+// Session 存儲設定
+const PgSession = connectPgSimple(session);
+
+// Session 中介軟體（必須在 cors 和 express.json() 之前）
+app.use(
+  session({
+    store: new PgSession({
+      pool: pool,
+      tableName: "sessions",
+      createTableIfMissing: false, // 我們已經手動建立表了
+    }),
+    secret: process.env.SESSION_SECRET || "your-secret-key-change-this",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: 8 * 60 * 60 * 1000, // 8 小時
+      httpOnly: true, // 防止 XSS 攻擊
+      secure: process.env.NODE_ENV === "production", // 生產環境使用 HTTPS
+      sameSite: "lax", // 防止 CSRF 攻擊
+    },
+    name: "sessionId", // 自訂 Cookie 名稱
+  })
+);
+
+// CORS 設定（必須在 session 之後）
 app.use(
   cors({
     origin: [
@@ -47,17 +78,37 @@ app.use(
       "https://localhost:5173",
       process.env.FRONTEND_URL,
     ].filter(Boolean),
-    credentials: true,
+    credentials: true, // 允許帶 Cookie
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
 app.use(express.json());
+
+// 定期清理過期 Session（每小時執行一次）
+cron.schedule("0 * * * *", async () => {
+  try {
+    const result = await pool.query(
+      "DELETE FROM sessions WHERE expire < NOW()"
+    );
+    console.log(`🧹 清理了 ${result.rowCount} 個過期 Session`);
+  } catch (error) {
+    console.error("❌ 清理過期 Session 失敗:", error);
+  }
+});
 
 // API 路由
 app.use("/api/employees", employeesRouter);
 app.use("/api/departments", departmentsRouter);
 app.use("/api/fido", authRouter);
+app.use("/api/session", sessionRouter);
+
+// 開發環境專用路由
+if (process.env.NODE_ENV === "development") {
+  app.use("/api/dev", devLoginRouter);
+  console.log("🚀 開發模式：快速登入功能已啟用 (/api/dev/*)");
+}
 
 // 健康檢查端點
 app.get("/api/health", (req, res) => {
@@ -65,6 +116,12 @@ app.get("/api/health", (req, res) => {
     success: true,
     message: "API 服務運行正常",
     database: "PostgreSQL (Supabase)",
+    environment: process.env.NODE_ENV || "production",
+    session: {
+      enabled: true,
+      store: "PostgreSQL",
+      maxAge: "8 hours",
+    },
     timestamp: new Date().toISOString(),
   });
 });
@@ -92,4 +149,6 @@ app.listen(PORT, () => {
   console.log(`🚀 API 伺服器運行在 http://localhost:${PORT}`);
   console.log(`🏥 健康檢查: http://localhost:${PORT}/api/health`);
   console.log(`💾 資料庫: PostgreSQL (Supabase)`);
+  console.log(`🔐 Session: PostgreSQL (8小時有效)`);
+  console.log(`🌍 環境: ${process.env.NODE_ENV || "production"}`);
 });

@@ -12,6 +12,12 @@ const NavigationPage = () => {
       color: 'blue'
     },
     {
+      title: '🔐 快速登入',
+      description: '不須FIDO認證',
+      path: '/dev/quick-login',
+      color: 'blue'
+    },
+    {
       title: '🔐 主系統頁面',
       description: '醫護人員使用手機生物識別登入',
       path: '/sss/homepage',
