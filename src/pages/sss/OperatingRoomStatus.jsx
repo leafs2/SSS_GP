@@ -237,7 +237,7 @@ const OperatingRoomStatus = () => {
 
             {/* 統計資訊 - 放在類別按鈕右側 */}
             <div className="flex gap-3">
-              <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2">
+              <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 w-32">
                 <div className="flex items-center gap-2 mb-1">
                   <Activity className="w-4 h-4 text-green-600" />
                   <span className="text-xs font-medium text-green-700">進行中</span>
@@ -245,7 +245,7 @@ const OperatingRoomStatus = () => {
                 <div className="text-2xl font-bold text-green-700">{stats.ongoingCount}</div>
               </div>
 
-              <div className="bg-purple-50 border border-purple-200 rounded-lg px-4 py-2">
+              <div className="bg-purple-50 border border-purple-200 rounded-lg px-4 py-2 w-32">
                 <div className="flex items-center gap-2 mb-1">
                   <Activity className="w-4 h-4 text-purple-600" />
                   <span className="text-xs font-medium text-purple-700">使用率</span>
@@ -253,7 +253,7 @@ const OperatingRoomStatus = () => {
                 <div className="text-2xl font-bold text-purple-700">{stats.usageRate}%</div>
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2 w-32">
                 <div className="flex items-center gap-2 mb-1">
                   <Calendar className="w-4 h-4 text-blue-600" />
                   <span className="text-xs font-medium text-blue-700">今日總量</span>
@@ -261,7 +261,7 @@ const OperatingRoomStatus = () => {
                 <div className="text-2xl font-bold text-blue-700">{stats.totalCount}</div>
               </div>
 
-              <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2">
+              <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 w-32">
                 <div className="flex items-center gap-2 mb-1">
                   <Clock className="w-4 h-4 text-gray-600" />
                   <span className="text-xs font-medium text-gray-700">已完成</span>
@@ -295,12 +295,11 @@ const OperatingRoomStatus = () => {
                       flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200
                       ${currentPage === 0
                         ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                        : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md'
+                        : 'bg-blue-300 text-white hover:bg-blue-700 shadow-md'
                       }
                     `}
                   >
                     <ChevronLeft className="w-4 h-4" />
-                    上一頁
                   </button>
                   
                   <span className="text-sm font-medium text-gray-700">
@@ -314,11 +313,10 @@ const OperatingRoomStatus = () => {
                       flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200
                       ${currentPage === totalPages - 1
                         ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                        : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md'
+                        : 'bg-blue-300 text-white hover:bg-blue-700 shadow-md'
                       }
                     `}
                   >
-                    下一頁
                     <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>

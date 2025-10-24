@@ -35,10 +35,10 @@ const Sidebar = () => {
       id: 'hospital',
       title: '全院手術概況',
       icon: Building2,
-      defaultPath: '/sss/hospital/rooms', // 點擊 ICON 時的預設跳轉頁面
+      defaultPath: '/sss/operation/rooms', // 點擊 ICON 時的預設跳轉頁面
       submenu: [
-        { id: 'operating-room-status', title: '目前手術室使用情形', icon: Activity, path: '/sss/hospital/rooms' },
-        { id: 'hospital-schedule', title: '預期手術行程', icon: BarChart3, path: '/sss/hospital/schedule' }
+        { id: 'operating-room-status', title: '目前手術室使用情形', icon: Activity, path: '/sss/operation/rooms' },
+        { id: 'hospital-schedule', title: '預期手術行程', icon: BarChart3, path: '/sss/surgery/schedule' }
       ]
     },
     {
