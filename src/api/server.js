@@ -17,6 +17,7 @@ import departmentsRouter, {
 import authRouter, { setPool as setAuthPool } from "./auth.js";
 import sessionRouter, { setPool as setSessionPool } from "./session.js";
 import devLoginRouter, { setPool as setDevLoginPool } from "./devLogin.js";
+import schedulesRouter, { setPool as setSchedulesPool } from "./schedules.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -41,6 +42,7 @@ setDepartmentsPool(pool);
 setAuthPool(pool);
 setSessionPool(pool);
 setDevLoginPool(pool);
+setSchedulesPool(pool);
 
 const app = express();
 
@@ -103,6 +105,7 @@ app.use("/api/employees", employeesRouter);
 app.use("/api/departments", departmentsRouter);
 app.use("/api/fido", authRouter);
 app.use("/api/session", sessionRouter);
+app.use("/api/schedules", schedulesRouter);
 
 // 開發環境專用路由
 if (process.env.NODE_ENV === "development") {
@@ -150,5 +153,6 @@ app.listen(PORT, () => {
   console.log(`🏥 健康檢查: http://localhost:${PORT}/api/health`);
   console.log(`💾 資料庫: PostgreSQL (Supabase)`);
   console.log(`🔐 Session: PostgreSQL (8小時有效)`);
+  console.log(`📅 排班管理: /api/schedules/*`);
   console.log(`🌍 環境: ${process.env.NODE_ENV || "production"}`);
 });

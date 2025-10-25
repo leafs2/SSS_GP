@@ -1,8 +1,12 @@
 // components/PageHeader.jsx
 import React, { useState, useEffect } from 'react';
-import { User } from 'lucide-react';
+import { User, LogOut } from 'lucide-react';
+import { useAuth } from '../../login/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 const PageHeader = ({ title, subtitle, children }) => {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
@@ -30,6 +34,16 @@ const PageHeader = ({ title, subtitle, children }) => {
     });
   };
 
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate('/login');
+    } catch (error) {
+      console.error('登出失敗:', error);
+      alert('登出失敗，請重試');
+    }
+  };
+
   return (
     <header className="bg-white shadow-sm border-b">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -43,16 +57,12 @@ const PageHeader = ({ title, subtitle, children }) => {
             {/* 自定義內容區域 */}
             {children}
             
-            {/* 日期時間和用戶圖示 */}
-            <div className="flex items-center gap-4">
-              <div className="text-right">
-                <p className="text-sm font-medium text-gray-900">{formatDate(currentTime)}</p>
-                <p className="text-lg font-mono text-blue-600">{formatTime(currentTime)}</p>
-              </div>
-              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
-                <User className="w-5 h-5 text-blue-600" />
-              </div>
+            {/* 日期時間 */}
+            <div className="text-right">
+              <p className="text-sm font-medium text-gray-900">{formatDate(currentTime)}</p>
+              <p className="text-lg font-mono text-blue-600">{formatTime(currentTime)}</p>
             </div>
+
           </div>
         </div>
       </div>
