@@ -18,6 +18,9 @@ import authRouter, { setPool as setAuthPool } from "./auth.js";
 import sessionRouter, { setPool as setSessionPool } from "./session.js";
 import devLoginRouter, { setPool as setDevLoginPool } from "./devLogin.js";
 import schedulesRouter, { setPool as setSchedulesPool } from "./schedules.js";
+import surgeryTypesRouter, {
+  setPool as setSurgeryTypesPool,
+} from "./surgeryTypes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -43,6 +46,7 @@ setAuthPool(pool);
 setSessionPool(pool);
 setDevLoginPool(pool);
 setSchedulesPool(pool);
+setSurgeryTypesPool(pool);
 
 const app = express();
 
@@ -106,6 +110,7 @@ app.use("/api/departments", departmentsRouter);
 app.use("/api/fido", authRouter);
 app.use("/api/session", sessionRouter);
 app.use("/api/schedules", schedulesRouter);
+app.use("/api/surgery-types", surgeryTypesRouter);
 
 // 開發環境專用路由
 if (process.env.NODE_ENV === "development") {
