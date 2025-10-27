@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { startAuthentication } from '@simplewebauthn/browser';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from './AuthContext'; // 引入 AuthContext
 
 const HospitalLogin = () => {
+  const navigate = useNavigate();
+  const { login } = useAuth(); // 取得 login 方法
+  
   const [loginStep, setLoginStep] = useState('ready'); // ready, qr-code, authenticating, success, error
   const [authOptions, setAuthOptions] = useState(null);
   const [sessionId, setSessionId] = useState('');
@@ -22,7 +27,8 @@ const HospitalLogin = () => {
         headers: { 
           'Content-Type': 'application/json',
           'Accept': 'application/json'
-        }
+        },
+        credentials: 'include' // 重要：包含 cookies 以支援 session
       });
 
       if (!response.ok) {
@@ -68,6 +74,7 @@ const HospitalLogin = () => {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
+        credentials: 'include', // 重要：包含 cookies 以支援 session
         body: JSON.stringify({
           sessionId,
           attResp
@@ -81,14 +88,16 @@ const HospitalLogin = () => {
         setUserInfo(result.user);
         setLoginStep('success');
         
-        // 登入成功後，直接跳轉到系統首頁
+        // 🔥 關鍵修改：使用 AuthContext 的 login 方法來設定登入狀態
+        login(result.user);
+        
+        // 登入成功後，根據角色跳轉到對應頁面
         setTimeout(() => {
-          // 可以將用戶資訊存到 localStorage 或 sessionStorage
-          sessionStorage.setItem('userInfo', JSON.stringify(result.user));
-          sessionStorage.setItem('loginTime', result.loginTime);
-          
-          // 直接跳轉到系統首頁
-          window.location.href = '/sss/homepage';
+          if (result.user.role === 'admin') {
+            navigate('/admin');
+          } else {
+            navigate('/sss/homepage');
+          }
         }, 2000);
         
       } else {
@@ -177,36 +186,25 @@ const HospitalLogin = () => {
                 </div>
               </div>
 
-              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                <h3 className="font-medium text-green-900 mb-2 text-sm flex items-center">
-                  <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 2.676-.732 5.175-2.431 7.186-4.785" />
-                  </svg>
-                  手機生物識別登入
-                </h3>
-                <p className="text-green-700 text-xs">
-                  系統將自動偵測您已註冊的手機，無需掃描 QR Code，直接完成生物識別驗證
-                </p>
-              </div>
-
               <button 
                 onClick={startLogin}
-                disabled={isLoading}
-                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold py-4 px-6 rounded-lg transition duration-200 transform hover:scale-[1.02] active:scale-[0.98] shadow-lg hover:shadow-xl flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium py-3 px-4 rounded-lg shadow-lg transition duration-200 flex items-center justify-center space-x-2"
               >
-                {isLoading ? (
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                ) : (
-                  <svg className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
-                  </svg>
-                )}
-                {isLoading ? '準備中...' : '開始安全登入'}
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                <span>開始登入</span>
               </button>
+
+              <div className="text-center">
+                <p className="text-xs text-gray-500">
+                  使用 FIDO2 安全認證標準
+                </p>
+              </div>
             </div>
           )}
 
-          {/* QR Code State */}
+          {/* QR Code / Preparing State */}
           {loginStep === 'qr-code' && (
             <div className="space-y-6">
               <div className="text-center">

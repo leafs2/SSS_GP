@@ -5,8 +5,8 @@ const EmployeeVerification = () => {
   const [employeeData, setEmployeeData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [isRegistered, setIsRegistered] = useState(false); // 新增：註冊狀態
-  const [checkingRegistration, setCheckingRegistration] = useState(false); // 新增：檢查中狀態
+  const [isRegistered, setIsRegistered] = useState(false);
+  const [checkingRegistration, setCheckingRegistration] = useState(false); 
 
   useEffect(() => {
     if (token) {
@@ -16,7 +16,7 @@ const EmployeeVerification = () => {
 
   const verifyRegistrationToken = async () => {
     try {
-      const response = await fetch(`http://localhost:3001/api/verify-registration-token/${token}`);
+      const response = await fetch(`http://localhost:3001/api/fido/verify-registration-token/${token}`);
       const data = await response.json();
       
       if (response.ok) {

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 // 科別選項
-const departments = [
+const allDepartments = [
   { code: 'CV', name: '心臟外科' },
   { code: 'NS', name: '神經外科' },
   { code: 'GS', name: '一般外科' },
@@ -13,8 +13,15 @@ const departments = [
   { code: 'ENT', name: '耳鼻喉科' },
   { code: 'TS', name: '胸腔外科' },
   { code: 'PS', name: '整形外科' },
-  { code: 'AN', name: '麻醉科' }
+  { code: 'AN', name: '麻醉科' },
+  { code: 'OT', name: '開刀房' }
 ];
+
+// 醫師和助理醫師的科別（不包含開刀房）
+const doctorDepartments = allDepartments.filter(dept => dept.code !== 'OT');
+
+// 護理人員的科別（包含開刀房）
+const nurseDepartments = allDepartments;
 
 function AddEmployeePage({ onBack, onSuccess }) {
   const [formData, setFormData] = useState({
@@ -30,6 +37,9 @@ function AddEmployeePage({ onBack, onSuccess }) {
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const navigate = useNavigate();
 
+  // 根據角色決定可用的科別
+  const availableDepartments = formData.role === 'N' ? nurseDepartments : doctorDepartments;
+
   // 當選項改變時更新預覽
   useEffect(() => {
     if (formData.department_code && formData.role && formData.permission) {
@@ -39,9 +49,17 @@ function AddEmployeePage({ onBack, onSuccess }) {
     }
   }, [formData.department_code, formData.role, formData.permission]);
 
+  // 當角色改變時，檢查科別是否仍然有效
+  useEffect(() => {
+    // 如果從護理人員改為醫師/助理醫師，且選擇的是開刀房，則清空科別
+    if ((formData.role === 'D' || formData.role === 'A') && formData.department_code === 'OT') {
+      setFormData(prev => ({ ...prev, department_code: '' }));
+    }
+  }, [formData.role]);
+
   const generatePreview = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/generate-employee-id', {
+      const response = await fetch('http://localhost:3001/api/employees/generate-id', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -136,6 +154,16 @@ function AddEmployeePage({ onBack, onSuccess }) {
     }
   };
 
+  // 取得角色顯示名稱
+  const getRoleDisplayName = (role) => {
+    switch(role) {
+      case 'D': return '醫師';
+      case 'A': return '助理醫師';
+      case 'N': return '護理人員';
+      default: return role;
+    }
+  };
+
   const ConfirmModal = () => (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4">
@@ -157,12 +185,12 @@ function AddEmployeePage({ onBack, onSuccess }) {
             <div className="flex">
               <span className="text-gray-600 w-24 text-left">科別：</span>
               <span className="font-medium">
-                {departments.find(d => d.code === formData.department_code)?.name}
+                {allDepartments.find(d => d.code === formData.department_code)?.name}
               </span>
             </div>
             <div className="flex">
               <span className="text-gray-600 w-24 text-left">職位：</span>
-              <span className="font-medium">{formData.role === 'D' ? '醫師' : '護理人員'}</span>
+              <span className="font-medium">{getRoleDisplayName(formData.role)}</span>
             </div>
             <div className="flex">
               <span className="text-gray-600 w-24 text-left">系統權限：</span>
@@ -307,7 +335,7 @@ function AddEmployeePage({ onBack, onSuccess }) {
                         }`}
                       >
                         <option value="">請選擇科別</option>
-                        {departments.map(dept => (
+                        {availableDepartments.map(dept => (
                           <option key={dept.code} value={dept.code}>
                             {dept.name} ({dept.code})
                           </option>
@@ -326,6 +354,7 @@ function AddEmployeePage({ onBack, onSuccess }) {
                         className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
                         <option value="D">醫師</option>
+                        <option value="A">助理醫師</option>
                         <option value="N">護理人員</option>
                       </select>
                     </div>
@@ -410,7 +439,7 @@ function AddEmployeePage({ onBack, onSuccess }) {
                         {preview || '生成中...'}
                       </div>
                       <p className="text-sm text-green-600">
-                        格式：{formData.role === 'D' ? '醫師' : '護理人員'} + {formData.department_code} + 權限等級 + 流水號
+                        格式：{getRoleDisplayName(formData.role)} + {formData.department_code} + 權限等級 + 流水號
                       </p>
                     </div>
                   ) : (

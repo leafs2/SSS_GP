@@ -63,18 +63,18 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // 檢查 email 是否已存在
-    const existingEmail = await pool.query(
-      "SELECT id FROM employees WHERE email = $1",
-      [email]
-    );
+    // 檢查 email 是否已存在 (開發測試移除)
+    // const existingEmail = await pool.query(
+    //   "SELECT id FROM employees WHERE email = $1",
+    //   [email]
+    // );
 
-    if (existingEmail.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        error: "此電子信箱已被使用",
-      });
-    }
+    // if (existingEmail.rows.length > 0) {
+    //   return res.status(400).json({
+    //     success: false,
+    //     error: "此電子信箱已被使用",
+    //   });
+    // }
 
     // 檢查科別是否存在
     const deptCheck = await pool.query(
