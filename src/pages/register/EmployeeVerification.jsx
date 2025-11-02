@@ -154,7 +154,9 @@ const EmployeeVerification = () => {
               <div className="bg-gray-50 rounded-lg p-3">
                 <div className="text-xs text-gray-500 mb-1">職位</div>
                 <div className="text-sm font-semibold text-gray-900">
-                  {employeeData.role === 'D' ? '醫師' : '護理師'}
+                  {employeeData.role === 'D' ? '醫師' : 
+                  employeeData.role === 'A' ? '助理醫師' : 
+                  '護理師'}
                 </div>
               </div>
             </div>

@@ -75,7 +75,13 @@ export async function sendRegistrationEmail(
           
           <div class="content">
             <div class="greeting">
-               ${name} ${employeeData.role === "D" ? "醫師" : "護理師"}，您好：
+               ${name} ${
+        employeeData.role === "D"
+          ? "醫師"
+          : employeeData.role === "A"
+          ? "助理醫師"
+          : "護理師"
+      }，您好：
             </div>
             
             <p style="color: #374151; margin-bottom: 25px;">
@@ -95,8 +101,12 @@ export async function sendRegistrationEmail(
               <div class="info-row">
                 <span class="info-label">職別</span>
                 <span class="info-value">${
-                  employeeData.role === "D" ? "醫師" : "護理人員"
-                }</span>
+                  employeeData.role === "D"
+                    ? "醫師"
+                    : employeeData.role === "A"
+                    ? "助理醫師"
+                    : "護理人員"
+                }</span>  
               </div>
               <div class="info-row">
                 <span class="info-label">權限等級</span>

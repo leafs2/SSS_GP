@@ -13,7 +13,8 @@ const departments = [
   { code: 'ENT', name: '耳鼻喉科' },
   { code: 'TS', name: '胸腔外科' },
   { code: 'PS', name: '整形外科' },
-  { code: 'AN', name: '麻醉科' }
+  { code: 'AN', name: '麻醉科' },
+  { code: 'OT', name: '開刀房' }
 ];
 
 function Dashboard() {

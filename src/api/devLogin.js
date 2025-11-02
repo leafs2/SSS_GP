@@ -54,7 +54,8 @@ router.get("/employees", async (req, res) => {
       department_code: emp.department_code,
       department_name: emp.department_name,
       role: emp.role,
-      role_display: emp.role === "D" ? "醫師" : "護理師",
+      role_display:
+        emp.role === "D" ? "醫師" : emp.role === "AD" ? "助理醫師" : "護理師",
       permission: emp.permission,
       permission_display: emp.permission === "1" ? "可修改" : "僅查看",
       status: emp.status,
@@ -125,7 +126,12 @@ router.post("/quick-login", async (req, res) => {
       department_code: employee.department_code,
       department_name: employee.department_name,
       role: employee.role,
-      role_display: employee.role === "D" ? "醫師" : "護理師",
+      role_display:
+        employee.role === "D"
+          ? "醫師"
+          : employee.role === "A"
+          ? "助理醫師"
+          : "護理師",
       permission: employee.permission,
       permission_display: employee.permission === "1" ? "可修改" : "僅查看",
     };

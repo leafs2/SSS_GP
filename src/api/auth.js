@@ -630,7 +630,12 @@ router.post("/authentication/verify", async (req, res) => {
       department_name: userCredential.department_name,
       role: userCredential.role,
       permission: userCredential.permission,
-      role_display: userCredential.role === "D" ? "醫師" : "護理師",
+      role_display:
+        userCredential.role === "D"
+          ? "醫師"
+          : userCredential.role === "A"
+          ? "助理醫師"
+          : "護理師",
       permission_display:
         userCredential.permission === "1" ? "可修改排程" : "僅限查看",
     };
