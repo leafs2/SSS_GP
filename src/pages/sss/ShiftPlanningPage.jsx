@@ -23,11 +23,15 @@ import Layout from './components/Layout';
 import PageHeader from './components/PageHeader';
 import { useMySchedule, useDepartmentSchedules } from '../../hooks/useSchedule';
 import { fillFlexibleSlots } from '../../utils/scheduleDataTransformer';
+import { useAuth } from '../../pages/login/AuthContext';
 
 const ShiftPlanningPage = () => {
+  const { user } = useAuth();
   // 當前週的日期
   const [currentWeekStart, setCurrentWeekStart] = useState(getWeekStart(new Date()));
   const [editMode, setEditMode] = useState(false);
+
+  const canEdit = user?.permission === '1';
 
   // 使用真實 API 資料
   const { 
@@ -436,13 +440,16 @@ const ShiftPlanningPage = () => {
 
                   {/* 編輯/儲存按鈕 */}
                   {!editMode ? (
-                    <button
-                      onClick={() => setEditMode(true)}
-                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
-                    >
-                      <Edit className="w-4 h-4" />
-                      編輯排班
-                    </button>
+                    // 只有有權限的人才顯示編輯按鈕
+                    canEdit && (
+                      <button
+                        onClick={() => setEditMode(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+                      >
+                        <Edit className="w-4 h-4" />
+                        編輯排班
+                      </button>
+                    )
                   ) : (
                     <div className="flex gap-2">
                       <button

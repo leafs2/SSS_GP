@@ -46,19 +46,27 @@ const Sidebar = () => {
         { id: 'hospital-schedule', title: '預期手術行程', icon: BarChart3, path: '/sss/surgery/schedule' }
       ]
     },
-    {
-      id: 'add-schedule',
-      title: '新增排程',
-      icon: Plus,
-      path: '/sss/add/schedule',
-      requirePermission: '1' // 需要修改權限
-    },
+    ...(user?.role === 'N' ? [
+      {
+        id: 'patient-info',
+        title: '病患資訊管理',
+        icon: Plus,
+        path: '/sss/patient/management'
+      }
+    ] : [
+      {
+        id: 'add-schedule',
+        title: '新增排程',
+        icon: Plus,
+        path: '/sss/add/schedule',
+        requirePermission: '1' 
+      }
+    ]),
     {
       id: 'shift-planning',
       title: '排班規劃',
       icon: Users,
       path: '/sss/shift/planning',
-      requirePermission: '1' // 需要修改權限
     }
   ];
 

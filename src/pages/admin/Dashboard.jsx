@@ -85,7 +85,9 @@ function Dashboard() {
   };
 
   const getRoleText = (role) => {
-    return role === 'D' ? '醫師' : '護理人員';
+    if (role === 'D') return '醫師';
+    if (role === 'A') return '助理醫師';
+    return '護理人員';
   };
 
   const getPermissionText = (permission) => {
@@ -338,6 +340,7 @@ function Dashboard() {
               >
                 <option value="">所有職位</option>
                 <option value="D">醫師</option>
+                <option value="A">助理醫師</option>
                 <option value="N">護理人員</option>
               </select>
 

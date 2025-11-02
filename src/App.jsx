@@ -12,6 +12,8 @@ import ShiftPlanningPage from './pages/sss/ShiftPlanningPage';
 import OperatingRoomStatus from './pages/sss/OperatingRoomStatus'; 
 import NavigationPage from './pages/NavigationPage';
 import QuickLogin from './pages/login/QuickLogin';
+import PatientManagementPage from './pages/sss/PatientManagementPage';
+import AddPatientPage from './pages/sss/AddPatientPage';
 import './App.css'
 
 function App() {
@@ -52,7 +54,7 @@ function App() {
           <Route 
             path="/sss/shift/planning" 
             element={
-              <ProtectedRoute requirePermission="1">
+              <ProtectedRoute>
                 <ShiftPlanningPage />
               </ProtectedRoute>
             } 
@@ -64,6 +66,24 @@ function App() {
             element={
               <ProtectedRoute>
                 <OperatingRoomStatus />
+              </ProtectedRoute>
+            } 
+          />
+
+          <Route 
+            path="/sss/patient/management" 
+            element={
+              <ProtectedRoute>
+                <PatientManagementPage />
+              </ProtectedRoute>
+            } 
+          />
+
+          <Route 
+            path="/sss/patient/add" 
+            element={
+              <ProtectedRoute>
+                <AddPatientPage />
               </ProtectedRoute>
             } 
           />

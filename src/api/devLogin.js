@@ -55,7 +55,7 @@ router.get("/employees", async (req, res) => {
       department_name: emp.department_name,
       role: emp.role,
       role_display:
-        emp.role === "D" ? "醫師" : emp.role === "AD" ? "助理醫師" : "護理師",
+        emp.role === "D" ? "醫師" : emp.role === "A" ? "助理醫師" : "護理師",
       permission: emp.permission,
       permission_display: emp.permission === "1" ? "可修改" : "僅查看",
       status: emp.status,

@@ -47,15 +47,6 @@ router.get("/me", requireAuth, async (req, res) => {
     const employeeId = req.session.user.employee_id;
     const userRole = req.session.user.role;
 
-    // 檢查是否為醫師
-    if (userRole !== "D") {
-      return res.status(403).json({
-        success: false,
-        error: "權限不足",
-        message: "只有醫師可以查看排班",
-      });
-    }
-
     // 查詢排班資料
     const scheduleResult = await pool.query(
       `SELECT 

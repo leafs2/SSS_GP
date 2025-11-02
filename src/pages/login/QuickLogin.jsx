@@ -337,9 +337,11 @@ const QuickLogin = () => {
 
                     {/* 角色 */}
                     <div className="col-span-2">
-                      <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${
+                     <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${
                         emp.role === 'D' 
                           ? 'bg-blue-100 text-blue-800' 
+                          : emp.role === 'A'
+                          ? 'bg-orange-100 text-orange-800'
                           : 'bg-purple-100 text-purple-800'
                       }`}>
                         {emp.role_display}
