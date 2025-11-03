@@ -27,6 +27,48 @@ router.get("/", async (req, res) => {
   }
 });
 
+// 1-1. 根據科別和職位查詢員工
+router.get("/by-department-role", async (req, res) => {
+  const { department_code, role } = req.query;
+
+  try {
+    // 驗證必要參數
+    if (!department_code || !role) {
+      return res.status(400).json({
+        success: false,
+        error: "請提供 department_code 和 role 參數",
+      });
+    }
+
+    const result = await pool.query(
+      `SELECT 
+        e.id,
+        e.employee_id,
+        e.name,
+        e.email,
+        e.role,
+        e.status,
+        d.name as department_name
+      FROM employees e 
+      LEFT JOIN departments d ON e.department_code = d.code 
+      WHERE e.department_code = $1 
+        AND e.role = $2 
+        AND e.status = 'active'
+      ORDER BY e.name ASC`,
+      [department_code, role]
+    );
+
+    res.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length,
+    });
+  } catch (error) {
+    console.error("查詢員工失敗:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // 2. 生成員工編號預覽
 router.post("/generate-id", async (req, res) => {
   const { department_code, role, permission } = req.body;

@@ -10,7 +10,14 @@ import {
   Loader2,
   AlertCircle,
   X,
-  Filter
+  Filter,
+  User,
+  Calendar,
+  Droplet,
+  FileText,
+  Heart,
+  Activity,
+  AlertTriangle
 } from 'lucide-react';
 import Layout from './components/Layout';
 import PageHeader from './components/PageHeader';
@@ -36,6 +43,20 @@ const PatientManagementPage = () => {
   const [options, setOptions] = useState({
     genders: [],
     bloodTypes: []
+  });
+
+  // 刪除確認對話框
+  const [deleteDialog, setDeleteDialog] = useState({
+    open: false,
+    patient: null,
+    loading: false
+  });
+
+  // 病患詳細資訊對話框
+  const [detailDialog, setDetailDialog] = useState({
+    open: false,
+    patient: null,
+    loading: false
   });
 
   // 載入選項
@@ -95,12 +116,89 @@ const PatientManagementPage = () => {
     }
   };
 
+  const loadPatientDetail = async (patientId) => {
+    setDetailDialog({ open: true, patient: null, loading: true });
+
+    try {
+      const response = await fetch(`http://localhost:3001/api/patients/${patientId}`);
+      const data = await response.json();
+
+      if (data.success) {
+        setDetailDialog({ open: true, patient: data.data, loading: false });
+      } else {
+        alert('載入病患詳細資料失敗');
+        setDetailDialog({ open: false, patient: null, loading: false });
+      }
+    } catch (error) {
+      console.error('載入病患詳細資料失敗:', error);
+      alert('無法連接到伺服器');
+      setDetailDialog({ open: false, patient: null, loading: false });
+    }
+  };
+
   const handleAddPatient = () => {
     navigate('/sss/patient/add');
   };
 
-  const handleViewPatient = (patientId) => {
-    navigate(`/sss/patient/${patientId}`);
+  const handleViewPatient = (patientId, e) => {
+    e.stopPropagation();
+    loadPatientDetail(patientId);
+  };
+
+  const handleRowClick = (patientId) => {
+    loadPatientDetail(patientId);
+  };
+
+  const handleEditPatient = (patientId, e) => {
+    e.stopPropagation();
+    navigate(`/sss/patient/edit/${patientId}`);
+  };
+
+  const handleDeleteClick = (patient, e) => {
+    e.stopPropagation();
+    setDeleteDialog({
+      open: true,
+      patient: patient,
+      loading: false
+    });
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteDialog.patient) return;
+
+    setDeleteDialog(prev => ({ ...prev, loading: true }));
+
+    try {
+      const response = await fetch(
+        `http://localhost:3001/api/patients/${deleteDialog.patient.patient_id}`,
+        {
+          method: 'DELETE'
+        }
+      );
+
+      const data = await response.json();
+
+      if (data.success) {
+        await loadPatients();
+        setDeleteDialog({ open: false, patient: null, loading: false });
+        alert('病患資料已成功刪除');
+      } else {
+        alert(data.error || '刪除失敗');
+        setDeleteDialog(prev => ({ ...prev, loading: false }));
+      }
+    } catch (error) {
+      console.error('刪除病患失敗:', error);
+      alert('刪除失敗：無法連接到伺服器');
+      setDeleteDialog(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteDialog({ open: false, patient: null, loading: false });
+  };
+
+  const handleCloseDetail = () => {
+    setDetailDialog({ open: false, patient: null, loading: false });
   };
 
   const clearFilters = () => {
@@ -113,6 +211,17 @@ const PatientManagementPage = () => {
   const formatDate = (dateString) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('zh-TW');
+  };
+
+  const calculateAge = (birthDate) => {
+    const birth = new Date(birthDate);
+    const today = new Date();
+    let age = today.getFullYear() - birth.getFullYear();
+    const monthDiff = today.getMonth() - birth.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+      age--;
+    }
+    return age;
   };
 
   return (
@@ -160,7 +269,7 @@ const PatientManagementPage = () => {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type="text"
-                    placeholder="搜尋姓名或身分證..."
+                    placeholder="搜尋姓名 / 身分證 / 病歷號"
                     value={searchTerm}
                     onChange={(e) => {
                       setSearchTerm(e.target.value);
@@ -262,35 +371,39 @@ const PatientManagementPage = () => {
                   <table className="min-w-full divide-y divide-gray-200">
                     <thead className="bg-gray-50">
                       <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3  text-xs font-medium text-gray-500 uppercase tracking-wider">
                           病歷號
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3  text-xs font-medium text-gray-500 uppercase tracking-wider">
                           姓名
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                           性別
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                           生日 / 年齡
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3  text-xs font-medium text-gray-500 uppercase tracking-wider">
                           身分證
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3  text-xs font-medium text-gray-500 uppercase tracking-wider">
                           血型
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3  text-xs font-medium text-gray-500 uppercase tracking-wider">
                           建檔日期
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                           操作
                         </th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
                       {patients.map((patient) => (
-                        <tr key={patient.patient_id} className="hover:bg-gray-50">
+                        <tr 
+                          key={patient.patient_id} 
+                          onClick={() => handleRowClick(patient.patient_id)}
+                          className="hover:bg-blue-50 cursor-pointer transition-colors"
+                        >
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="text-sm font-medium text-gray-900">
                               {patient.patient_id}
@@ -330,13 +443,29 @@ const PatientManagementPage = () => {
                             </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm">
-                            <button
-                              onClick={() => handleViewPatient(patient.patient_id)}
-                              className="text-blue-600 hover:text-blue-900 mr-3"
-                              title="查看詳情"
-                            >
-                              <Eye className="w-4 h-4" />
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={(e) => handleViewPatient(patient.patient_id, e)}
+                                className="text-blue-600 hover:text-blue-900 p-1 rounded hover:bg-blue-100"
+                                title="查看詳情"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={(e) => handleEditPatient(patient.patient_id, e)}
+                                className="text-green-600 hover:text-green-900 p-1 rounded hover:bg-green-100"
+                                title="編輯資料"
+                              >
+                                <Edit className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={(e) => handleDeleteClick(patient, e)}
+                                className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-100"
+                                title="刪除病患"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -391,6 +520,285 @@ const PatientManagementPage = () => {
           </div>
         </main>
       </div>
+
+      {/* 病患詳細資訊對話框 */}
+      {detailDialog.open && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+            {/* 標題列 */}
+            <div className="bg-blue-400 text-white px-6 py-4 flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <User className="w-6 h-6" />
+                <h2 className="text-xl font-semibold">病患詳細資訊</h2>
+              </div>
+              <button
+                onClick={handleCloseDetail}
+                className="hover:bg-blue-700 p-1 rounded transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* 內容區 */}
+            <div className="overflow-y-auto max-h-[calc(90vh-120px)]">
+              {detailDialog.loading ? (
+                <div className="p-12 text-center">
+                  <Loader2 className="w-10 h-10 animate-spin text-blue-600 mx-auto mb-4" />
+                  <p className="text-gray-600">載入病患資料中...</p>
+                </div>
+              ) : detailDialog.patient ? (
+                <div className="p-6 space-y-6">
+                  {/* 基本資訊 - 左右條列式 */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-4">
+                      <User className="w-5 h-5 text-blue-600" />
+                      <h3 className="text-lg font-semibold text-gray-900">基本資訊</h3>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-4">
+                      <div className="grid grid-cols-2 gap-x-12 gap-y-3">
+                        <div className="flex items-center">
+                          <label className="text-sm text-gray-600 w-24">病歷號</label>
+                          <p className="text-base font-medium text-gray-900">
+                            {detailDialog.patient.patient_id}
+                          </p>
+                        </div>
+                        <div className="flex items-center">
+                          <label className="text-sm text-gray-600 w-24">姓名</label>
+                          <p className="text-base font-medium text-gray-900">
+                            {detailDialog.patient.name}
+                          </p>
+                        </div>
+                        <div className="flex items-center">
+                          <label className="text-sm text-gray-600 w-24">性別</label>
+                          <p className="text-base font-medium text-gray-900">
+                            {detailDialog.patient.gender_name}
+                          </p>
+                        </div>
+                        <div className="flex items-center">
+                          <label className="text-sm text-gray-600 w-24">血型</label>
+                          <p className="text-base font-medium text-gray-900">
+                            <span className="inline-flex px-3 py-1 text-sm font-semibold rounded-full bg-red-100 text-red-800">
+                              {detailDialog.patient.blood_type_name}
+                            </span>
+                          </p>
+                        </div>
+                        <div className="flex items-center">
+                          <label className="text-sm text-gray-600 w-24">生日</label>
+                          <p className="text-base font-medium text-gray-900">
+                            {formatDate(detailDialog.patient.birth_date)}
+                          </p>
+                        </div>
+                        <div className="flex items-center">
+                          <label className="text-sm text-gray-600 w-24">年齡</label>
+                          <p className="text-base font-medium text-gray-900">
+                            {calculateAge(detailDialog.patient.birth_date)} 歲
+                          </p>
+                        </div>
+                        <div className="flex items-center">
+                          <label className="text-sm text-gray-600 w-24">身分證</label>
+                          <p className="text-base font-medium font-mono text-gray-900">
+                            {detailDialog.patient.id_number}
+                          </p>
+                        </div>
+                        <div className="flex items-center">
+                          <label className="text-sm text-gray-600 w-24">建檔日期</label>
+                          <p className="text-base font-medium text-gray-900">
+                            {formatDate(detailDialog.patient.created_at)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 所有主題區 - 橫向排列 */}
+                  <div className="grid grid-cols-4 gap-4">
+                    {/* 藥物過敏 */}
+                    <div className="flex flex-col">
+                      <div className="flex items-center gap-2 mb-3">
+                        <AlertTriangle className="w-4 h-4 text-orange-600" />
+                        <h3 className="text-sm font-semibold text-gray-900">藥物過敏</h3>
+                      </div>
+                      <div className="bg-orange-50 rounded-lg p-3 flex-1 overflow-y-auto max-h-48">
+                        {detailDialog.patient.allergies && detailDialog.patient.allergies.length > 0 ? (
+                          <div className="space-y-2">
+                            {detailDialog.patient.allergies.map((allergy) => (
+                              <div
+                                key={allergy.allergy_id}
+                                className="bg-orange-200 text-orange-800 px-3 py-2 rounded-lg text-sm font-medium"
+                              >
+                                {allergy.drug_allergy}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-gray-600 text-xs">無記錄</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 個人病史 */}
+                    <div className="flex flex-col">
+                      <div className="flex items-center gap-2 mb-3">
+                        <FileText className="w-4 h-4 text-purple-600" />
+                        <h3 className="text-sm font-semibold text-gray-900">個人病史</h3>
+                      </div>
+                      <div className="bg-purple-50 rounded-lg p-3 flex-1 overflow-y-auto max-h-48">
+                        {detailDialog.patient.personalHistory && detailDialog.patient.personalHistory.length > 0 ? (
+                          <div className="space-y-2">
+                            {detailDialog.patient.personalHistory.map((history) => (
+                              <div
+                                key={history.history_id}
+                                className="bg-purple-200 text-purple-800 px-3 py-2 rounded-lg text-sm font-medium"
+                              >
+                                {history.history_option}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-gray-600 text-xs">無記錄</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 家族病史 */}
+                    <div className="flex flex-col">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Heart className="w-4 h-4 text-pink-600" />
+                        <h3 className="text-sm font-semibold text-gray-900">家族病史</h3>
+                      </div>
+                      <div className="bg-pink-50 rounded-lg p-3 flex-1 overflow-y-auto max-h-48">
+                        {detailDialog.patient.familyHistory && detailDialog.patient.familyHistory.length > 0 ? (
+                          <div className="space-y-2">
+                            {detailDialog.patient.familyHistory.map((history, index) => (
+                              <div key={index} className="bg-pink-200 text-pink-800 px-3 py-2 rounded-lg text-sm font-medium">
+                                <div>{history.history_option}</div>
+                                <div className="text-xs text-pink-700 mt-1">({history.kinship})</div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-gray-600 text-xs">無記錄</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 生活習慣 */}
+                    <div className="flex flex-col">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Activity className="w-4 h-4 text-green-600" />
+                        <h3 className="text-sm font-semibold text-gray-900">生活習慣</h3>
+                      </div>
+                      <div className="bg-green-50 rounded-lg p-3 flex-1 overflow-y-auto max-h-48">
+                        {detailDialog.patient.lifestyle && detailDialog.patient.lifestyle.length > 0 ? (
+                          <div className="space-y-2">
+                            {detailDialog.patient.lifestyle.map((item) => (
+                              <div
+                                key={item.lifestyle_id}
+                                className="bg-green-200 text-green-800 px-3 py-2 rounded-lg text-sm font-medium"
+                              >
+                                {item.lifestyle}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-gray-600 text-xs">無記錄</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            {/* 底部操作區 */}
+            {!detailDialog.loading && detailDialog.patient && (
+              <div className="border-t border-gray-200 px-6 py-4 bg-gray-50 flex justify-end gap-3">
+                <button
+                  onClick={() => {
+                    handleCloseDetail();
+                    handleEditPatient(detailDialog.patient.patient_id, { stopPropagation: () => {} });
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                >
+                  <Edit className="w-4 h-4" />
+                  編輯資料
+                </button>
+                <button
+                  onClick={handleCloseDetail}
+                  className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
+                >
+                  關閉
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 刪除確認對話框 */}
+      {deleteDialog.open && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="flex-shrink-0 w-12 h-12 rounded-full bg-red-100 flex items-center justify-center">
+                  <AlertCircle className="w-6 h-6 text-red-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    確認刪除病患
+                  </h3>
+                </div>
+              </div>
+
+              <div className="mb-6">
+                <p className="text-gray-600 mb-3">
+                  您確定要刪除以下病患的資料嗎？此操作無法復原。
+                </p>
+                {deleteDialog.patient && (
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div className="text-gray-600">病歷號：</div>
+                      <div className="font-medium">{deleteDialog.patient.patient_id}</div>
+                      <div className="text-gray-600">姓名：</div>
+                      <div className="font-medium">{deleteDialog.patient.name}</div>
+                      <div className="text-gray-600">身分證：</div>
+                      <div className="font-medium">{deleteDialog.patient.id_number}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={handleDeleteCancel}
+                  disabled={deleteDialog.loading}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleDeleteConfirm}
+                  disabled={deleteDialog.loading}
+                  className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {deleteDialog.loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      刪除中...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      確認刪除
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 };

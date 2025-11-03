@@ -159,8 +159,5 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 API 伺服器運行在 http://localhost:${PORT}`);
   console.log(`🏥 健康檢查: http://localhost:${PORT}/api/health`);
-  console.log(`💾 資料庫: PostgreSQL (Supabase)`);
-  console.log(`🔐 Session: PostgreSQL (8小時有效)`);
-  console.log(`📅 排班管理: /api/schedules/*`);
   console.log(`🌍 環境: ${process.env.NODE_ENV || "production"}`);
 });

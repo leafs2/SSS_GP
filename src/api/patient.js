@@ -475,4 +475,240 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+/**
+ * PUT /api/patients/:id
+ * 更新病患資料
+ */
+router.put("/:id", async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const { id } = req.params;
+    const {
+      name,
+      gender,
+      bloodType,
+      birthDate,
+      idNumber,
+      allergies = [],
+      personalHistory = [],
+      familyHistory = [],
+      lifestyle = [],
+    } = req.body;
+
+    // 驗證必填欄位
+    if (!name || !gender || !bloodType || !birthDate || !idNumber) {
+      return res.status(400).json({
+        success: false,
+        error: "請填寫所有必填欄位",
+      });
+    }
+
+    // 檢查病患是否存在
+    const checkPatientQuery =
+      "SELECT patient_id FROM patient WHERE patient_id = $1";
+    const checkPatientResult = await client.query(checkPatientQuery, [id]);
+
+    if (checkPatientResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        success: false,
+        error: "找不到該病患",
+      });
+    }
+
+    // 檢查身分證是否與其他病患重複
+    const checkIdQuery =
+      "SELECT patient_id FROM patient WHERE id_number = $1 AND patient_id != $2";
+    const checkIdResult = await client.query(checkIdQuery, [idNumber, id]);
+
+    if (checkIdResult.rows.length > 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        success: false,
+        error: "該身分證號碼已被其他病患使用",
+      });
+    }
+
+    // 更新病患基本資料
+    const updatePatientQuery = `
+      UPDATE patient 
+      SET name = $1, gender = $2, blood_type = $3, birth_date = $4, id_number = $5, updated_at = CURRENT_TIMESTAMP
+      WHERE patient_id = $6
+    `;
+    await client.query(updatePatientQuery, [
+      name,
+      gender,
+      bloodType,
+      birthDate,
+      idNumber,
+      id,
+    ]);
+
+    // 刪除舊的藥物過敏記錄
+    await client.query(
+      "DELETE FROM patient_drug_allergy WHERE patient_id = $1",
+      [id]
+    );
+
+    // 新增新的藥物過敏記錄
+    if (allergies.length > 0) {
+      const allergyValues = allergies
+        .map((allergyId) => `(${id}, ${allergyId})`)
+        .join(",");
+      await client.query(`
+        INSERT INTO patient_drug_allergy (patient_id, allergy_id)
+        VALUES ${allergyValues}
+      `);
+    }
+
+    // 刪除舊的個人病史記錄
+    await client.query(
+      "DELETE FROM patient_history_personal WHERE patient_id = $1",
+      [id]
+    );
+
+    // 新增新的個人病史記錄
+    if (personalHistory.length > 0) {
+      const historyValues = personalHistory
+        .map((historyId) => `(${id}, ${historyId})`)
+        .join(",");
+      await client.query(`
+        INSERT INTO patient_history_personal (patient_id, history_id)
+        VALUES ${historyValues}
+      `);
+    }
+
+    // 刪除舊的家族病史記錄
+    await client.query(
+      "DELETE FROM patient_history_family WHERE patient_id = $1",
+      [id]
+    );
+
+    // 新增新的家族病史記錄
+    if (familyHistory.length > 0) {
+      const familyValues = familyHistory
+        .map((item) => `(${id}, ${item.historyId}, '${item.kinship}')`)
+        .join(",");
+      await client.query(`
+        INSERT INTO patient_history_family (patient_id, history_id, kinship)
+        VALUES ${familyValues}
+      `);
+    }
+
+    // 刪除舊的生活習慣記錄
+    await client.query("DELETE FROM patient_lifestyle WHERE patient_id = $1", [
+      id,
+    ]);
+
+    // 新增新的生活習慣記錄
+    if (lifestyle.length > 0) {
+      const lifestyleValues = lifestyle
+        .map((lifestyleId) => `(${id}, ${lifestyleId})`)
+        .join(",");
+      await client.query(`
+        INSERT INTO patient_lifestyle (patient_id, lifestyle_id)
+        VALUES ${lifestyleValues}
+      `);
+    }
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: "病患資料更新成功",
+      data: {
+        patient_id: id,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("更新病患失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * DELETE /api/patients/:id
+ * 刪除病患
+ */
+router.delete("/:id", async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const { id } = req.params;
+
+    // 檢查病患是否存在
+    const checkPatientQuery =
+      "SELECT patient_id FROM patient WHERE patient_id = $1";
+    const checkPatientResult = await client.query(checkPatientQuery, [id]);
+
+    if (checkPatientResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        success: false,
+        error: "找不到該病患",
+      });
+    }
+
+    // 檢查是否有關聯的手術記錄
+    const checkSurgeryQuery =
+      "SELECT COUNT(*) as count FROM surgery WHERE patient_id = $1";
+    const checkSurgeryResult = await client.query(checkSurgeryQuery, [id]);
+
+    if (parseInt(checkSurgeryResult.rows[0].count) > 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        success: false,
+        error: "該病患已有手術記錄，無法刪除",
+      });
+    }
+
+    // 刪除相關記錄（按照外鍵依賴順序）
+    await client.query(
+      "DELETE FROM patient_drug_allergy WHERE patient_id = $1",
+      [id]
+    );
+    await client.query(
+      "DELETE FROM patient_history_personal WHERE patient_id = $1",
+      [id]
+    );
+    await client.query(
+      "DELETE FROM patient_history_family WHERE patient_id = $1",
+      [id]
+    );
+    await client.query("DELETE FROM patient_lifestyle WHERE patient_id = $1", [
+      id,
+    ]);
+
+    // 刪除病患基本資料
+    await client.query("DELETE FROM patient WHERE patient_id = $1", [id]);
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: "病患資料刪除成功",
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("刪除病患失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
 export default router;
