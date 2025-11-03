@@ -14,6 +14,8 @@ import NavigationPage from './pages/NavigationPage';
 import QuickLogin from './pages/login/QuickLogin';
 import PatientManagementPage from './pages/sss/PatientManagementPage';
 import AddPatientPage from './pages/sss/AddPatientPage';
+import NurseShiftViewPage from './pages/sss/NurseShiftViewPage';
+import NurseShiftManagePage from './pages/sss/NurseShiftManagePage';
 import './App.css'
 
 function App() {
@@ -51,11 +53,31 @@ function App() {
               </ProtectedRoute>
             } 
           />
+          
+          {/* 排班規劃（醫生/其他角色） */}
           <Route 
             path="/sss/shift/planning" 
             element={
               <ProtectedRoute>
                 <ShiftPlanningPage />
+              </ProtectedRoute>
+            } 
+          />
+          
+          {/* 護士排班相關路由 */}
+          <Route 
+            path="/sss/nurse/shift/view" 
+            element={
+              <ProtectedRoute >
+                <NurseShiftViewPage />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/sss/nurse/shift/manage" 
+            element={
+              <ProtectedRoute requirePermission="1">
+                <NurseShiftManagePage />
               </ProtectedRoute>
             } 
           />

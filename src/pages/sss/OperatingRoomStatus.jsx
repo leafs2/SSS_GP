@@ -10,8 +10,11 @@ import {
 } from 'lucide-react';
 import Layout from './components/Layout';
 import PageHeader from './components/PageHeader';
+import { useAuth } from '../../pages/login/AuthContext';
 
 const OperatingRoomStatus = () => {
+  const { user } = useAuth();
+  const userDepartment = user?.department_name || '外科部門';
   const [selectedCategory, setSelectedCategory] = useState('surgery');
   const [currentDate] = useState(new Date());
   const [currentPage, setCurrentPage] = useState(0); // 新增：當前頁碼
@@ -197,7 +200,7 @@ const OperatingRoomStatus = () => {
         {/* 頂部標題欄 */}
         <PageHeader 
           title="手術室使用情形" 
-          subtitle="外科部門"
+          subtitle={userDepartment}
         />
 
         {/* 主要內容區域 */}

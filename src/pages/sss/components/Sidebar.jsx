@@ -62,12 +62,39 @@ const Sidebar = () => {
         requirePermission: '1' 
       }
     ]),
-    {
-      id: 'shift-planning',
-      title: '排班規劃',
-      icon: Users,
-      path: '/sss/shift/planning',
-    }
+    // 排班規劃 - 根據角色顯示不同內容
+    ...(user?.role === 'N' ? [
+      {
+        id: 'shift-planning',
+        title: '排班規劃',
+        icon: Users,
+        defaultPath: '/sss/nurse/shift/view',
+        submenu: [
+          { 
+            id: 'nurse-shift-view', 
+            title: '排班規劃', 
+            icon: Calendar, 
+            path: '/sss/nurse/shift/view' 
+          },
+          ...(user?.permission === '1' ? [
+            { 
+              id: 'nurse-shift-manage', 
+              title: '排班輪值', 
+              icon: Settings, 
+              path: '/sss/nurse/shift/manage',
+              requirePermission: '1'
+            }
+          ] : [])
+        ]
+      }
+    ] : [
+      {
+        id: 'shift-planning',
+        title: '排班規劃',
+        icon: Users,
+        path: '/sss/shift/planning',
+      }
+    ])
   ];
 
   const toggleSidebar = () => {
@@ -247,19 +274,42 @@ const Sidebar = () => {
                       ${Array.isArray(openSubmenu) && openSubmenu.includes(item.id) && isOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}
                     `}>
                       <ul className="mt-2 ml-4 space-y-1">
-                        {item.submenu.map((subItem) => (
-                          <li key={subItem.id}>
-                            <button
-                              onClick={() => handleNavigation(subItem.path)}
-                              className="w-full flex items-center p-2 rounded-lg text-left transition-all duration-200 group text-gray-600 hover:bg-blue-50 hover:text-blue-700"
-                            >
-                              <subItem.icon className="w-4 h-4 text-gray-400 group-hover:text-blue-600 transition-colors duration-200" />
-                              <span className="ml-3 text-sm font-medium">
-                                {subItem.title}
-                              </span>
-                            </button>
-                          </li>
-                        ))}
+                        {item.submenu.map((subItem) => {
+                          const subItemDisabled = isMenuItemDisabled(subItem);
+                          
+                          return (
+                            <li key={subItem.id}>
+                              <button
+                                onClick={() => handleNavigation(subItem.path, subItem.requirePermission)}
+                                disabled={subItemDisabled}
+                                className={`
+                                  w-full flex items-center p-2 rounded-lg text-left transition-all duration-200 group
+                                  ${subItemDisabled 
+                                    ? 'text-gray-400 cursor-not-allowed opacity-50' 
+                                    : 'text-gray-600 hover:bg-blue-50 hover:text-blue-700'
+                                  }
+                                `}
+                                title={subItemDisabled ? '需要修改權限' : ''}
+                              >
+                                <subItem.icon className={`
+                                  w-4 h-4 transition-colors duration-200
+                                  ${subItemDisabled 
+                                    ? 'text-gray-300' 
+                                    : 'text-gray-400 group-hover:text-blue-600'
+                                  }
+                                `} />
+                                <div className="flex items-center justify-between flex-1 ml-3">
+                                  <span className="text-sm font-medium">
+                                    {subItem.title}
+                                  </span>
+                                  {subItemDisabled && (
+                                    <span className="text-xs text-gray-400 ml-2">🔒</span>
+                                  )}
+                                </div>
+                              </button>
+                            </li>
+                          );
+                        })}
                       </ul>
                     </div>
                   )}
