@@ -185,6 +185,45 @@ router.get("/department-overview", requireNurse, async (req, res) => {
   }
 });
 
+// 獲取科別所有護士列表（用於新增護士功能）
+router.get("/department-nurses", requireNurse, async (req, res) => {
+  try {
+    const departmentCode = req.session.user.department_code;
+
+    const query = `
+      SELECT 
+        e.employee_id,
+        e.name,
+        e.department_code,
+        d.name as department_name
+      FROM employees e
+      LEFT JOIN departments d ON e.department_code = d.code
+      WHERE e.department_code = $1 
+        AND e.role = 'N'
+        AND e.status = 'active'
+      ORDER BY e.name
+    `;
+
+    const result = await pool.query(query, [departmentCode]);
+
+    res.json({
+      success: true,
+      data: result.rows.map((row) => ({
+        id: row.employee_id,
+        name: row.name,
+        departmentCode: row.department_code,
+        departmentName: row.department_name,
+      })),
+    });
+  } catch (error) {
+    console.error("獲取科別護士列表失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: "獲取護士列表失敗",
+    });
+  }
+});
+
 // 獲取所有手術室列表
 router.get("/surgery-rooms", requireNurse, async (req, res) => {
   try {

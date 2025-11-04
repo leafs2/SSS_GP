@@ -101,6 +101,55 @@ export const useDepartmentNurseSchedules = () => {
   };
 };
 
+// 獲取科別所有護士列表
+export const useDepartmentNurses = () => {
+  const [nurses, setNurses] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchNurses = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const response = await fetch(
+        `${API_URL}/api/nurse-schedules/department-nurses`,
+        {
+          method: "GET",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "獲取護士列表失敗");
+      }
+
+      setNurses(data.data || []);
+    } catch (err) {
+      setError(err);
+      console.error("獲取科別護士列表失敗:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchNurses();
+  }, []);
+
+  return {
+    nurses,
+    isLoading,
+    error,
+    refetch: fetchNurses,
+  };
+};
+
 // 獲取所有手術室列表
 export const useSurgeryRooms = () => {
   const [rooms, setRooms] = useState([]);
