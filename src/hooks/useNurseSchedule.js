@@ -101,6 +101,55 @@ export const useDepartmentNurseSchedules = () => {
   };
 };
 
+// 獲取手術室類型及數量
+export const useSurgeryRoomTypes = () => {
+  const [roomTypes, setRoomTypes] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchRoomTypes = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const response = await fetch(
+        `${API_URL}/api/nurse-schedules/surgery-room-types`,
+        {
+          method: "GET",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "獲取手術室類型失敗");
+      }
+
+      setRoomTypes(data.data || []);
+    } catch (err) {
+      setError(err);
+      console.error("獲取手術室類型失敗:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRoomTypes();
+  }, []);
+
+  return {
+    roomTypes,
+    isLoading,
+    error,
+    refetch: fetchRoomTypes,
+  };
+};
+
 // 獲取科別所有護士列表
 export const useDepartmentNurses = () => {
   const [nurses, setNurses] = useState([]);
@@ -196,5 +245,94 @@ export const useSurgeryRooms = () => {
     isLoading,
     error,
     refetch: fetchRooms,
+  };
+};
+
+// 批次儲存護士排班
+export const saveBatchNurseSchedule = async (shift, assignments) => {
+  try {
+    const response = await fetch(`${API_URL}/api/nurse-schedules/batch-save`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        shift,
+        assignments,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "儲存排班失敗");
+    }
+
+    return {
+      success: true,
+      data: data.data,
+      message: data.message,
+    };
+  } catch (error) {
+    console.error("批次儲存護士排班失敗:", error);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+};
+
+// 獲取時段排班資料
+export const useShiftAssignments = (shift) => {
+  const [assignments, setAssignments] = useState({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchAssignments = async () => {
+    if (!shift) {
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const response = await fetch(
+        `${API_URL}/api/nurse-schedules/shift-assignments/${shift}`,
+        {
+          method: "GET",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "獲取排班資料失敗");
+      }
+
+      setAssignments(data.data || {});
+    } catch (err) {
+      setError(err);
+      console.error("獲取時段排班資料失敗:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAssignments();
+  }, [shift]);
+
+  return {
+    assignments,
+    isLoading,
+    error,
+    refetch: fetchAssignments,
   };
 };

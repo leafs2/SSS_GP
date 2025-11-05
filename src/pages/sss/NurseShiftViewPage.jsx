@@ -1,7 +1,7 @@
 // pages/sss/NurseShiftViewPage.jsx
 // 護士排班規劃頁面 - 查看模式
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Calendar,
   Clock,
@@ -15,19 +15,17 @@ import {
   AlertCircle,
   Loader2,
   Info,
-  Users
+  Users,
+  AlertTriangle
 } from 'lucide-react';
 import Layout from './components/Layout';
 import PageHeader from './components/PageHeader';
 import { useAuth } from '../../pages/login/AuthContext';
-import { useMyNurseSchedule, useDepartmentNurseSchedules, useSurgeryRooms } from '../../hooks/useNurseSchedule';
+import { useMyNurseSchedule, useDepartmentNurseSchedules } from '../../hooks/useNurseSchedule';
 
 const NurseShiftViewPage = () => {
   const { user } = useAuth();
   const userDepartment = user?.department_name || '外科部門';
-  
-  // 當前週的日期
-  const [currentWeekStart, setCurrentWeekStart] = useState(getWeekStart(new Date()));
 
   // 使用真實 API
   const { 
@@ -40,42 +38,6 @@ const NurseShiftViewPage = () => {
     schedules: departmentSchedules, 
     isLoading: deptLoading 
   } = useDepartmentNurseSchedules();
-
-  const { 
-    rooms: surgeryRooms, 
-    isLoading: roomsLoading 
-  } = useSurgeryRooms();
-
-  // 獲取週的開始日期
-  function getWeekStart(date) {
-    const d = new Date(date);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    return new Date(d.setDate(diff));
-  }
-
-  // 上一週
-  const handlePrevWeek = () => {
-    const newDate = new Date(currentWeekStart);
-    newDate.setDate(newDate.getDate() - 7);
-    setCurrentWeekStart(newDate);
-  };
-
-  // 下一週
-  const handleNextWeek = () => {
-    const newDate = new Date(currentWeekStart);
-    newDate.setDate(newDate.getDate() + 7);
-    setCurrentWeekStart(newDate);
-  };
-
-  // 格式化日期範圍
-  const getWeekRange = () => {
-    const start = new Date(currentWeekStart);
-    const end = new Date(currentWeekStart);
-    end.setDate(end.getDate() + 6);
-    
-    return `${start.getMonth() + 1}月${start.getDate()}日 - ${end.getMonth() + 1}月${end.getDate()}日`;
-  };
 
   // 獲取班別資訊
   const getShiftInfo = (shift) => {
@@ -117,43 +79,49 @@ const NurseShiftViewPage = () => {
 
   const weekDays = ['週一', '週二', '週三', '週四', '週五', '週六', '週日'];
   const shifts = ['morning', 'evening', 'night'];
-  const shiftLabels = {
-    morning: '早班',
-    evening: '晚班', 
-    night: '大夜班'
-  };
 
   // 整理科別排班資料
   const organizeDepartmentSchedule = () => {
-    if (!departmentSchedules || !surgeryRooms) return [];
+    if (!departmentSchedules) return [];
 
-    // 獲取所有有護士的手術室
-    const roomsWithNurses = [...new Set(departmentSchedules.map(n => n.surgeryRoom).filter(Boolean))];
+    // 按手術室類型分組（surgeryRoomType）
+    const roomTypeMap = new Map();
     
-    // 將使用者的手術室放在最前面
-    const myRoom = nurseSchedule?.surgeryRoom;
-    const sortedRooms = myRoom 
-      ? [myRoom, ...roomsWithNurses.filter(r => r !== myRoom)]
-      : roomsWithNurses;
+    departmentSchedules.forEach(nurse => {
+      const roomType = nurse.surgeryRoomType || '未分配';
+      
+      if (!roomTypeMap.has(roomType)) {
+        roomTypeMap.set(roomType, {
+          roomType: roomType,
+          displayName: nurse.surgeryRoomType || '未分配手術室',
+          isMyRoom: nurse.surgeryRoomType === nurseSchedule?.surgeryRoomType,
+          hasSpecificRoom: false, // 是否有指定準確手術室
+          nursesByShift: {
+            morning: [],
+            evening: [],
+            night: []
+          }
+        });
+      }
+      
+      const roomData = roomTypeMap.get(roomType);
+      const shift = nurse.shift || 'morning';
+      
+      if (roomData.nursesByShift[shift]) {
+        roomData.nursesByShift[shift].push(nurse);
+      }
+      
+      // 檢查是否有準確的手術室 ID
+      if (nurse.surgeryRoom) {
+        roomData.hasSpecificRoom = true;
+      }
+    });
 
-    // 為每個手術室建立排班資料
-    const roomSchedules = sortedRooms.map(roomId => {
-      const room = surgeryRooms.find(r => r.id === roomId);
-      const nursesInRoom = departmentSchedules.filter(n => n.surgeryRoom === roomId);
-
-      // 按班別分組
-      const nursesByShift = {
-        morning: nursesInRoom.filter(n => n.shift === 'morning'),
-        evening: nursesInRoom.filter(n => n.shift === 'evening'),
-        night: nursesInRoom.filter(n => n.shift === 'night')
-      };
-
-      return {
-        roomId,
-        roomType: room?.roomType || '未知',
-        isMyRoom: roomId === myRoom,
-        nursesByShift
-      };
+    // 轉換為陣列並排序（我的手術室類型優先）
+    const roomSchedules = Array.from(roomTypeMap.values()).sort((a, b) => {
+      if (a.isMyRoom && !b.isMyRoom) return -1;
+      if (!a.isMyRoom && b.isMyRoom) return 1;
+      return a.roomType.localeCompare(b.roomType);
     });
 
     return roomSchedules;
@@ -161,8 +129,18 @@ const NurseShiftViewPage = () => {
 
   const roomSchedules = organizeDepartmentSchedule();
 
+  // 調試：輸出排班資料
+  useEffect(() => {
+    if (nurseSchedule) {
+      console.log('我的排班資料:', nurseSchedule);
+    }
+    if (departmentSchedules && departmentSchedules.length > 0) {
+      console.log('科別排班資料:', departmentSchedules);
+    }
+  }, [nurseSchedule, departmentSchedules]);
+
   // Loading 狀態
-  if (scheduleLoading || deptLoading || roomsLoading) {
+  if (scheduleLoading || deptLoading) {
     return (
       <Layout>
         <div className="min-h-full bg-gray-50">
@@ -214,6 +192,17 @@ const NurseShiftViewPage = () => {
             <div className="bg-white rounded-lg shadow-md p-6">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-lg font-bold text-gray-800">我的排班</h2>
+                {nurseSchedule && nurseSchedule.dayOffWeek && nurseSchedule.dayOffWeek.length > 0 && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <Coffee className="w-4 h-4 text-gray-500" />
+                    <span className="text-gray-600">
+                      休假日：
+                      <span className="font-medium text-gray-800 ml-1">
+                        {nurseSchedule.dayOffWeek.map(d => weekDays[d]).join('、')}
+                      </span>
+                    </span>
+                  </div>
+                )}
               </div>
 
               {nurseSchedule ? (
@@ -294,10 +283,26 @@ const NurseShiftViewPage = () => {
                                     </div>
                                     
                                     {/* 手術室資訊 */}
-                                    <div className="mt-1 px-3 py-1 bg-blue-50 border border-blue-200 rounded-full">
-                                      <p className="text-xs text-blue-700 font-medium">
-                                        {nurseSchedule?.surgeryRoom}
-                                      </p>
+                                    <div className="flex flex-col items-center gap-1">
+                                      {nurseSchedule?.surgeryRoom ? (
+                                        <div className="px-3 py-1 bg-blue-50 border border-blue-200 rounded-full">
+                                          <p className="text-xs text-blue-700 font-medium">
+                                            {nurseSchedule.surgeryRoom}
+                                          </p>
+                                        </div>
+                                      ) : (
+                                        <>
+                                          <div className="px-3 py-1 bg-amber-50 border border-amber-200 rounded-full">
+                                            <p className="text-xs text-amber-700 font-medium">
+                                              {nurseSchedule.surgeryRoomType}
+                                            </p>
+                                          </div>
+                                          <div className="flex items-center gap-1 text-xs text-amber-600">
+                                            <AlertTriangle className="w-3 h-3" />
+                                            <span>尚未分配</span>
+                                          </div>
+                                        </>
+                                      )}
                                     </div>
                                   </div>
                                 )}
@@ -358,7 +363,7 @@ const NurseShiftViewPage = () => {
                         </th>
                         {roomSchedules.map((room) => (
                           <th 
-                            key={room.roomId}
+                            key={room.roomType}
                             className={`border border-gray-300 p-3 text-sm font-semibold
                               ${room.isMyRoom 
                                 ? 'bg-blue-100 text-blue-800' 
@@ -368,13 +373,16 @@ const NurseShiftViewPage = () => {
                           >
                             <div className="flex flex-col items-center gap-1">
                               <Building2 className="w-4 h-4" />
-                              <span>{room.roomId}</span>
-                              <span className="text-xs font-normal opacity-75">
-                                {room.roomType}
-                              </span>
+                              <span>{room.displayName}</span>
+                              {!room.hasSpecificRoom && (
+                                <div className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full mt-1">
+                                  <AlertTriangle className="w-3 h-3" />
+                                  <span>尚未分配</span>
+                                </div>
+                              )}
                               {room.isMyRoom && (
                                 <span className="text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full mt-1">
-                                  我的手術室
+                                  我的手術室類型
                                 </span>
                               )}
                             </div>
@@ -406,7 +414,7 @@ const NurseShiftViewPage = () => {
                               const nurses = room.nursesByShift[shift] || [];
                               return (
                                 <td 
-                                  key={`${room.roomId}-${shift}`}
+                                  key={`${room.roomType}-${shift}`}
                                   className={`border border-gray-300 p-3 align-top
                                     ${room.isMyRoom ? 'bg-blue-50' : 'bg-white'}
                                   `}
@@ -416,15 +424,22 @@ const NurseShiftViewPage = () => {
                                       nurses.map((nurse, idx) => (
                                         <div 
                                           key={idx}
-                                          className={`text-sm text-center py-1 px-2 rounded
+                                          className={`text-sm py-1 px-2 rounded
                                             ${room.isMyRoom && nurse.employeeId === user?.employee_id
                                               ? 'bg-blue-200 text-blue-900 font-bold'
-                                              : 'text-gray-700'
+                                              : 'text-gray-700 bg-gray-50'
                                             }
                                           `}
                                         >
-                                          {nurse.name}
-                                          {nurse.employeeId === user?.employee_id && ' (我)'}
+                                          <div className="text-center">
+                                            {nurse.name}
+                                            {nurse.employeeId === user?.employee_id && ' (我)'}
+                                          </div>
+                                          {nurse.dayOffWeek && nurse.dayOffWeek.length > 0 && (
+                                            <div className="text-xs text-gray-500 text-center mt-0.5">
+                                              休假: {nurse.dayOffWeek.map(d => weekDays[d]).join('、')}
+                                            </div>
+                                          )}
                                         </div>
                                       ))
                                     ) : (

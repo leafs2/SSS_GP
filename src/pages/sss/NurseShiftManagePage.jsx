@@ -1,7 +1,7 @@
 // pages/sss/NurseShiftManagePage.jsx
 // 護士排班輪值管理頁面 - 僅限有權限的護士使用
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Sunrise,
   Sunset,
@@ -22,7 +22,8 @@ import {
 import Layout from './components/Layout';
 import PageHeader from './components/PageHeader';
 import { useAuth } from '../../pages/login/AuthContext';
-import { useDepartmentNurses } from '../../hooks/useNurseSchedule';
+import { useDepartmentNurses, saveBatchNurseSchedule, useShiftAssignments } from '../../hooks/useNurseSchedule';
+import { useSurgeryRoomTypes } from '../../hooks/useSurgeryRooms';
 
 const NurseShiftManagePage = () => {
   const { user } = useAuth();
@@ -34,9 +35,24 @@ const NurseShiftManagePage = () => {
     isLoading: nursesLoading, 
     error: nursesError 
   } = useDepartmentNurses();
+
+  // 使用真實 API 獲取手術室類型和數量
+  const { 
+    roomTypes: surgeryRoomTypes, 
+    isLoading: roomTypesLoading, 
+    error: roomTypesError 
+  } = useSurgeryRoomTypes();
   
   // 當前選擇的時段
   const [selectedShift, setSelectedShift] = useState('morning');
+
+  // 載入當前時段的排班資料
+  const {
+    assignments: savedAssignments,
+    isLoading: assignmentsLoading,
+    error: assignmentsError,
+    refetch: refetchAssignments
+  } = useShiftAssignments(selectedShift);
   
   // 模態框狀態
   const [showAddNurseModal, setShowAddNurseModal] = useState(false);
@@ -46,25 +62,52 @@ const NurseShiftManagePage = () => {
   
   // 手術室類型和分配的護士
   const [roomTypeAssignments, setRoomTypeAssignments] = useState({
-    morning: {
-      '一般手術房': [],
-      '心臟手術房': [],
-      '骨科手術房': []
-    },
-    evening: {
-      '一般手術房': [],
-      '心臟手術房': [],
-      '骨科手術房': []
-    },
-    night: {
-      '一般手術房': [],
-      '心臟手術房': [],
-      '骨科手術房': []
-    }
+    morning: {},
+    evening: {},
+    night: {}
   });
 
-  // 手術室類型列表
-  const roomTypes = ['一般手術房', '心臟手術房', '骨科手術房'];
+  // 當手術室類型載入完成後，初始化分配狀態
+  useEffect(() => {
+    if (surgeryRoomTypes && surgeryRoomTypes.length > 0) {
+      const initialAssignments = {};
+      ['morning', 'evening', 'night'].forEach(shift => {
+        initialAssignments[shift] = {};
+        surgeryRoomTypes.forEach(roomType => {
+          initialAssignments[shift][roomType.type] = [];
+        });
+      });
+      setRoomTypeAssignments(initialAssignments);
+    }
+  }, [surgeryRoomTypes]);
+
+  // 當資料庫排班資料載入完成後，更新到對應的時段
+  useEffect(() => {
+    if (savedAssignments && Object.keys(savedAssignments).length > 0 && surgeryRoomTypes) {
+      setRoomTypeAssignments(prev => {
+        const updated = { ...prev };
+        
+        // 確保當前時段的結構存在
+        if (!updated[selectedShift]) {
+          updated[selectedShift] = {};
+        }
+        
+        // 合併資料庫載入的資料
+        Object.keys(savedAssignments).forEach(roomType => {
+          updated[selectedShift][roomType] = savedAssignments[roomType];
+        });
+        
+        // 確保所有手術室類型都有初始化
+        surgeryRoomTypes.forEach(roomType => {
+          if (!updated[selectedShift][roomType.type]) {
+            updated[selectedShift][roomType.type] = [];
+          }
+        });
+        
+        return updated;
+      });
+    }
+  }, [savedAssignments, selectedShift, surgeryRoomTypes]);
 
   const weekDays = ['週一', '週二', '週三', '週四', '週五', '週六', '週日'];
 
@@ -134,13 +177,20 @@ const NurseShiftManagePage = () => {
 
     const nursesToAdd = availableNurses.filter(n => selectedNurseIds.includes(n.id));
     
+    // 判斷是否為急診手術房
+    const isEmergencyRoom = selectedRoomType === 'RE';
+    
     setRoomTypeAssignments(prev => ({
       ...prev,
       [selectedShift]: {
         ...prev[selectedShift],
         [selectedRoomType]: [
           ...prev[selectedShift][selectedRoomType],
-          ...nursesToAdd.map(nurse => ({ ...nurse, dayOff: [] }))
+          ...nursesToAdd.map(nurse => ({ 
+            ...nurse, 
+            // 急診：空陣列；其他：預設週日(6)
+            dayOff: isEmergencyRoom ? [] : [6]
+          }))
         ]
       }
     }));
@@ -181,13 +231,52 @@ const NurseShiftManagePage = () => {
       const updatedNurses = prev[selectedShift][roomType].map(nurse => {
         if (nurse.id === nurseId) {
           const currentDayOff = nurse.dayOff || [];
-          const newDayOff = currentDayOff.includes(dayIndex)
-            ? currentDayOff.filter(d => d !== dayIndex)
-            : currentDayOff.length < 2
-              ? [...currentDayOff, dayIndex].sort()
-              : currentDayOff;
           
-          return { ...nurse, dayOff: newDayOff };
+          // 判斷是否為急診手術房（RE）
+          const isEmergencyRoom = roomType === 'RE';
+          
+          if (isEmergencyRoom) {
+            // 急診：可自由選擇任意兩天
+            const newDayOff = currentDayOff.includes(dayIndex)
+              ? currentDayOff.filter(d => d !== dayIndex)
+              : currentDayOff.length < 2
+                ? [...currentDayOff, dayIndex].sort()
+                : currentDayOff;
+            
+            return { ...nurse, dayOff: newDayOff };
+          } else {
+            // 其他手術室：固定週日(6) + 自選一天
+            const SUNDAY = 6;
+            
+            if (dayIndex === SUNDAY) {
+              // 點擊週日：不允許取消
+              return nurse;
+            }
+            
+            // 點擊其他天
+            if (currentDayOff.includes(dayIndex)) {
+              // 取消選擇（但保留週日）
+              return { 
+                ...nurse, 
+                dayOff: currentDayOff.filter(d => d !== dayIndex) 
+              };
+            } else {
+              // 新增選擇
+              const otherDays = currentDayOff.filter(d => d !== SUNDAY);
+              if (otherDays.length < 1) {
+                // 還可以選一天
+                return { 
+                  ...nurse, 
+                  dayOff: [...currentDayOff, dayIndex].sort() 
+                };
+              }
+              // 已經選滿，替換掉之前選的那天
+              return { 
+                ...nurse, 
+                dayOff: [SUNDAY, dayIndex].sort() 
+              };
+            }
+          }
         }
         return nurse;
       });
@@ -206,11 +295,14 @@ const NurseShiftManagePage = () => {
   const getFilteredNurses = () => {
     if (!selectedRoomType || !availableNurses) return [];
     
-    const currentAssignments = roomTypeAssignments[selectedShift][selectedRoomType];
-    const assignedIds = currentAssignments.map(n => n.id);
+    // 收集所有已分配的護士 ID（包含所有手術室類型）
+    const allAssignedIds = new Set();
+    Object.values(currentAssignments).forEach(nurses => {
+      nurses.forEach(nurse => allAssignedIds.add(nurse.id));
+    });
     
     return availableNurses
-      .filter(nurse => !assignedIds.includes(nurse.id))
+      .filter(nurse => !allAssignedIds.has(nurse.id)) // 排除所有已分配的護士
       .filter(nurse => 
         nurse.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         nurse.id.toLowerCase().includes(searchQuery.toLowerCase())
@@ -224,10 +316,48 @@ const NurseShiftManagePage = () => {
   };
 
   // 儲存排班設定
-  const handleSave = () => {
-    alert('儲存排班設定');
-    // TODO: 實作儲存邏輯
+  const handleSave = async () => {
+    try {
+      setSaveLoading(true);
+      setSaveError(null);
+
+      // 檢查是否所有護士都已設定完整的休假日
+      let incompleteNurses = [];
+      Object.entries(currentAssignments).forEach(([roomType, nurses]) => {
+        nurses.forEach(nurse => {
+          if (!nurse.dayOff || nurse.dayOff.length < 2) {
+            incompleteNurses.push(`${nurse.name} (${roomType})`);
+          }
+        });
+      });
+
+      if (incompleteNurses.length > 0) {
+        setSaveError(`以下護士尚未設定完整休假日：\n${incompleteNurses.join(', ')}`);
+        setSaveLoading(false);
+        return;
+      }
+
+      // 呼叫 API 儲存
+      const result = await saveBatchNurseSchedule(selectedShift, currentAssignments);
+
+      if (result.success) {
+        alert(`儲存成功！\n${result.message}\n成功: ${result.data.successCount} 位`);
+        setSaveError(null);
+        
+        // 重新載入排班資料
+        refetchAssignments();
+      } else {
+        setSaveError(result.error || '儲存失敗');
+      }
+    } catch (error) {
+      setSaveError(error.message || '儲存失敗，請稍後再試');
+    } finally {
+      setSaveLoading(false);
+    }
   };
+
+  const [saveLoading, setSaveLoading] = useState(false);
+  const [saveError, setSaveError] = useState(null);
 
   const currentShiftInfo = getShiftInfo(selectedShift);
   const currentAssignments = roomTypeAssignments[selectedShift];
@@ -256,13 +386,40 @@ const NurseShiftManagePage = () => {
                 </button>
                 <button
                   onClick={handleSave}
-                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
+                  disabled={saveLoading}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Save className="w-4 h-4" />
-                  儲存設定
+                  {saveLoading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      儲存中...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4" />
+                      儲存設定
+                    </>
+                  )}
                 </button>
               </div>
             </div>
+
+            {/* 錯誤訊息 */}
+            {saveError && (
+              <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-sm text-red-800 font-medium">儲存失敗</p>
+                  <p className="text-xs text-red-600 mt-1 whitespace-pre-line">{saveError}</p>
+                </div>
+                <button
+                  onClick={() => setSaveError(null)}
+                  className="text-red-400 hover:text-red-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
 
             {/* 時段切換 */}
             <div className="mb-6">
@@ -304,121 +461,179 @@ const NurseShiftManagePage = () => {
 
             {/* 手術室類型區塊 */}
             <div className="space-y-4">
-              {roomTypes.map(roomType => {
-                const nurses = currentAssignments[roomType] || [];
-                
-                return (
-                  <div 
-                    key={roomType}
-                    className="border-2 border-gray-200 rounded-lg p-4 hover:border-gray-300 transition-colors"
-                  >
-                    {/* 手術室類型標題 */}
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-2">
-                        <Building2 className="w-5 h-5 text-blue-600" />
-                        <h3 className="text-base font-bold text-gray-800">
-                          {roomType}
-                        </h3>
-                        <span className="px-2 py-1 bg-gray-100 rounded text-xs text-gray-600">
-                          {nurses.length} 位護士
-                        </span>
-                      </div>
-                      
-                      <button
-                        onClick={() => openAddNurseModal(roomType)}
-                        className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
-                      >
-                        <Plus className="w-4 h-4" />
-                        新增護士
-                      </button>
-                    </div>
-
-                    {/* 護士列表 */}
-                    {nurses.length > 0 ? (
-                      <div className="space-y-3">
-                        {nurses.map(nurse => (
-                          <div 
-                            key={nurse.id}
-                            className="bg-gray-50 rounded-lg p-4 border border-gray-200"
-                          >
-                            <div className="flex items-center justify-between gap-4">
-                              {/* 護士資訊 */}
-                              <div className="flex items-center gap-4 flex-1 min-w-0">
-                                <div className="flex-shrink-0">
-                                  <p className="font-medium text-gray-800">
-                                    {nurse.name}
-                                    <span className="ml-2 text-xs text-gray-500">
-                                      ({nurse.id})
-                                    </span>
-                                  </p>
-                                  <p className="text-xs text-gray-500 mt-0.5">
-                                    休假日：
-                                    {nurse.dayOff && nurse.dayOff.length > 0
-                                      ? nurse.dayOff.map(d => weekDays[d]).join('、')
-                                      : '尚未設定'
-                                    }
-                                    {nurse.dayOff && nurse.dayOff.length < 2 && (
-                                      <span className="text-amber-600 ml-1">
-                                        (選擇 {2 - nurse.dayOff.length} 天)
-                                      </span>
-                                    )}
-                                  </p>
-                                </div>
-
-                                {/* 休假日選擇器 */}
-                                <div className="flex items-center gap-2 flex-1">
-                                  {weekDays.map((day, index) => {
-                                    const isSelected = nurse.dayOff?.includes(index);
-                                    const canSelect = !isSelected && (nurse.dayOff?.length || 0) < 2;
-                                    const isDisabled = !isSelected && !canSelect;
-                                    
-                                    return (
-                                      <button
-                                        key={index}
-                                        onClick={() => !isDisabled && toggleDayOff(roomType, nurse.id, index)}
-                                        disabled={isDisabled}
-                                        className={`flex items-center gap-1 px-3 py-1.5 rounded border text-sm transition-colors ${
-                                          isSelected
-                                            ? 'bg-blue-100 border-blue-400 text-blue-700'
-                                            : isDisabled
-                                              ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'
-                                              : 'bg-white border-gray-300 text-gray-700 hover:border-blue-400'
-                                        }`}
-                                      >
-                                        {isSelected ? (
-                                          <CheckSquare className="w-3 h-3" />
-                                        ) : (
-                                          <Square className="w-3 h-3" />
-                                        )}
-                                        {day}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                              
-                              {/* 移除按鈕 */}
-                              <button
-                                onClick={() => handleRemoveNurse(roomType, nurse.id)}
-                                className="flex-shrink-0 p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                title="移除護士"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
+              {roomTypesLoading ? (
+                <div className="text-center py-12">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-3"></div>
+                  <p className="text-sm text-gray-500">載入手術室類型中...</p>
+                </div>
+              ) : roomTypesError ? (
+                <div className="text-center py-12 text-red-500">
+                  <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <p className="text-sm">載入手術室類型失敗</p>
+                  <p className="text-xs mt-1">{roomTypesError.message}</p>
+                </div>
+              ) : surgeryRoomTypes && surgeryRoomTypes.length > 0 ? (
+                surgeryRoomTypes.map(roomTypeData => {
+                  const nurses = currentAssignments[roomTypeData.type] || [];
+                  
+                  return (
+                    <div 
+                      key={roomTypeData.type}
+                      className="border-2 border-gray-200 rounded-lg p-4 hover:border-gray-300 transition-colors"
+                    >
+                      {/* 手術室類型標題 */}
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="w-5 h-5 text-blue-600" />
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-base font-bold text-gray-800">
+                              {roomTypeData.displayName || roomTypeData.type}
+                            </h3>
+                            {roomTypeData.displayName && (
+                              <span className="text-sm text-gray-500">
+                                ({roomTypeData.type})
+                              </span>
+                            )}
                           </div>
-                        ))}
+                          <span className="px-2 py-1 bg-blue-100 rounded text-xs text-blue-700 font-medium">
+                            {roomTypeData.roomCount} 間手術室
+                          </span>
+                          <span className="px-2 py-1 bg-gray-100 rounded text-xs text-gray-600">
+                            {nurses.length} 位護士
+                          </span>
+                        </div>
+                        
+                        <button
+                          onClick={() => openAddNurseModal(roomTypeData.type)}
+                          className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
+                        >
+                          <Plus className="w-4 h-4" />
+                          新增護士
+                        </button>
                       </div>
-                    ) : (
-                      <div className="text-center py-8 text-gray-400">
-                        <UserPlus className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                        <p className="text-sm">尚未新增護士</p>
-                        <p className="text-xs mt-1">點擊上方「新增護士」按鈕開始新增</p>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+
+                      {/* 護士列表 */}
+                      {nurses.length > 0 ? (
+                        <div className="space-y-3">
+                          {nurses.map(nurse => (
+                            <div 
+                              key={nurse.id}
+                              className="bg-gray-50 rounded-lg p-4 border border-gray-200"
+                            >
+                              <div className="flex items-center justify-between gap-4">
+                                {/* 護士資訊 */}
+                                <div className="flex items-center gap-4 flex-1 min-w-0">
+                                  <div className="flex-shrink-0">
+                                    <p className="font-medium text-gray-800">
+                                      {nurse.name}
+                                      <span className="ml-2 text-xs text-gray-500">
+                                        ({nurse.id})
+                                      </span>
+                                    </p>
+                                    <p className="text-xs text-gray-500 mt-0.5">
+                                      休假日：
+                                      {nurse.dayOff && nurse.dayOff.length > 0
+                                        ? nurse.dayOff.map(d => weekDays[d]).join('、')
+                                        : '尚未設定'
+                                      }
+                                      {nurse.dayOff && nurse.dayOff.length < 2 && (
+                                        <span className="text-amber-600 ml-1">
+                                          {roomTypeData.type === 'RE' 
+                                            ? `(選擇 ${2 - nurse.dayOff.length} 天)`
+                                            : `(再選擇 ${2 - nurse.dayOff.length} 天)`
+                                          }
+                                        </span>
+                                      )}
+                                    </p>
+                                  </div>
+
+                                  {/* 休假日選擇器 */}
+                                  <div className="flex items-center gap-2 flex-1">
+                                    {weekDays.map((day, index) => {
+                                      const isSelected = nurse.dayOff?.includes(index);
+                                      const isEmergencyRoom = roomTypeData.type === 'RE';
+                                      const isSunday = index === 6;
+                                      
+                                      // 急診：可自由選擇任意兩天
+                                      // 其他：週日固定，只能再選一天
+                                      let canSelect, isDisabled, isFixed;
+                                      
+                                      if (isEmergencyRoom) {
+                                        // 急診邏輯
+                                        canSelect = !isSelected && (nurse.dayOff?.length || 0) < 2;
+                                        isDisabled = !isSelected && !canSelect;
+                                        isFixed = false;
+                                      } else {
+                                        // 其他手術室邏輯
+                                        if (isSunday) {
+                                          // 週日固定選中，不可取消
+                                          canSelect = false;
+                                          isDisabled = false;
+                                          isFixed = true;
+                                        } else {
+                                          const otherDays = (nurse.dayOff || []).filter(d => d !== 6);
+                                          canSelect = !isSelected && otherDays.length < 1;
+                                          isDisabled = !isSelected && !canSelect;
+                                          isFixed = false;
+                                        }
+                                      }
+                                      
+                                      return (
+                                        <button
+                                          key={index}
+                                          onClick={() => !isDisabled && !isFixed && toggleDayOff(roomTypeData.type, nurse.id, index)}
+                                          disabled={isDisabled}
+                                          className={`flex items-center gap-1 px-3 py-1.5 rounded border text-sm transition-colors ${
+                                            isFixed
+                                              ? 'bg-gray-200 border-gray-400 text-gray-700 cursor-not-allowed'
+                                              : isSelected
+                                                ? 'bg-blue-100 border-blue-400 text-blue-700'
+                                                : isDisabled
+                                                  ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'
+                                                  : 'bg-white border-gray-300 text-gray-700 hover:border-blue-400'
+                                          }`}
+                                          title={isFixed ? '固定休假日' : ''}
+                                        >
+                                          {isSelected ? (
+                                            <CheckSquare className="w-3 h-3" />
+                                          ) : (
+                                            <Square className="w-3 h-3" />
+                                          )}
+                                          {day}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                                
+                                {/* 移除按鈕 */}
+                                <button
+                                  onClick={() => handleRemoveNurse(roomTypeData.type, nurse.id)}
+                                  className="flex-shrink-0 p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="移除護士"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8 text-gray-400">
+                          <UserPlus className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                          <p className="text-sm">尚未新增護士</p>
+                          <p className="text-xs mt-1">點擊上方「新增護士」按鈕開始新增</p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-center py-12 text-gray-400">
+                  <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <p className="text-sm">暫無手術室類型資料</p>
+                </div>
+              )}
             </div>
           </div>
 

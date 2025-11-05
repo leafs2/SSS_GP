@@ -25,6 +25,9 @@ import patientRouter, { setPool as setPatientPool } from "./patient.js";
 import nurseSchedulesRouter, {
   setPool as setNurseSchedulesPool,
 } from "./nurseSchedules.js";
+import surgeryRoomsRouter, {
+  setPool as setSurgeryRoomsPool,
+} from "./surgeryRooms.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -53,6 +56,7 @@ setSchedulesPool(pool);
 setSurgeryTypesPool(pool);
 setPatientPool(pool);
 setNurseSchedulesPool(pool);
+setSurgeryRoomsPool(pool);
 
 const app = express();
 
@@ -119,6 +123,7 @@ app.use("/api/schedules", schedulesRouter);
 app.use("/api/surgery-types", surgeryTypesRouter);
 app.use("/api/patients", patientRouter);
 app.use("/api/nurse-schedules", nurseSchedulesRouter);
+app.use("/api/surgery-rooms", surgeryRoomsRouter);
 
 // 開發環境專用路由
 if (process.env.NODE_ENV === "development") {
