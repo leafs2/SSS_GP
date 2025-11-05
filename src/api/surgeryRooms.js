@@ -20,20 +20,59 @@ const requireAuth = (req, res, next) => {
   next();
 };
 
-// 獲取所有手術室類型和數量
+// 獲取所有手術室類型和數量（可依時段篩選）
 router.get("/types-with-count", requireAuth, async (req, res) => {
   try {
-    const query = `
-      SELECT 
-        srt.type,
-        srt.time_info,
-        COUNT(sr.id) as room_count,
-        array_agg(sr.id ORDER BY sr.id) FILTER (WHERE sr.id IS NOT NULL) as room_ids
-      FROM surgery_room_type srt
-      LEFT JOIN surgery_room sr ON srt.type = sr.room_type AND sr.is_available = true
-      GROUP BY srt.type, srt.time_info
-      ORDER BY COUNT(sr.id) DESC, srt.type
-    `;
+    const { shift } = req.query; // 接收時段參數：morning, evening, night
+
+    let query;
+
+    if (shift) {
+      // 根據時段決定要檢查的欄位
+      let shiftColumn;
+      if (shift === "morning") {
+        shiftColumn = "morning_shift";
+      } else if (shift === "evening") {
+        shiftColumn = "night_shift";
+      } else if (shift === "night") {
+        shiftColumn = "graveyard_shift";
+      }
+
+      // 使用子查詢來正確計算每個類型在特定時段的手術室數量
+      query = `
+        SELECT 
+          srt.type,
+          srt.time_info,
+          COALESCE(room_data.room_count, 0) as room_count,
+          COALESCE(room_data.room_ids, ARRAY[]::character varying[]) as room_ids
+        FROM surgery_room_type srt
+        LEFT JOIN (
+          SELECT 
+            room_type,
+            COUNT(id) as room_count,
+            array_agg(id ORDER BY id) as room_ids
+          FROM surgery_room
+          WHERE ${shiftColumn} = true
+          GROUP BY room_type
+        ) room_data ON srt.type = room_data.room_type
+        WHERE COALESCE(room_data.room_count, 0) > 0
+        ORDER BY room_count DESC, srt.type
+      `;
+    } else {
+      // 沒有指定時段，返回所有手術室
+      query = `
+        SELECT 
+          srt.type,
+          srt.time_info,
+          COUNT(sr.id) as room_count,
+          array_agg(sr.id ORDER BY sr.id) FILTER (WHERE sr.id IS NOT NULL) as room_ids
+        FROM surgery_room_type srt
+        LEFT JOIN surgery_room sr ON srt.type = sr.room_type
+        GROUP BY srt.type, srt.time_info
+        HAVING COUNT(sr.id) > 0
+        ORDER BY COUNT(sr.id) DESC, srt.type
+      `;
+    }
 
     const result = await pool.query(query);
 
@@ -63,12 +102,13 @@ router.get("/available", requireAuth, async (req, res) => {
       SELECT 
         sr.id,
         sr.room_type,
-        sr.is_available,
         sr.nurse_count,
+        sr.morning_shift,
+        sr.night_shift,
+        sr.graveyard_shift,
         srt.time_info
       FROM surgery_room sr
       LEFT JOIN surgery_room_type srt ON sr.room_type = srt.type
-      WHERE sr.is_available = true
       ORDER BY sr.room_type, sr.id
     `;
 
@@ -79,8 +119,10 @@ router.get("/available", requireAuth, async (req, res) => {
       data: result.rows.map((row) => ({
         id: row.id,
         roomType: row.room_type,
-        isAvailable: row.is_available,
         nurseCount: row.nurse_count,
+        morningShift: row.morning_shift,
+        nightShift: row.night_shift,
+        graveyardShift: row.graveyard_shift,
         timeInfo: row.time_info,
       })),
     });
@@ -97,17 +139,30 @@ router.get("/available", requireAuth, async (req, res) => {
 router.get("/type/:roomType", requireAuth, async (req, res) => {
   try {
     const { roomType } = req.params;
+    const { shift } = req.query;
+
+    // 根據時段決定要檢查的欄位
+    let shiftCondition = "";
+    if (shift === "morning") {
+      shiftCondition = "AND sr.morning_shift = true";
+    } else if (shift === "evening") {
+      shiftCondition = "AND sr.night_shift = true";
+    } else if (shift === "night") {
+      shiftCondition = "AND sr.graveyard_shift = true";
+    }
 
     const query = `
       SELECT 
         sr.id,
         sr.room_type,
-        sr.is_available,
         sr.nurse_count,
+        sr.morning_shift,
+        sr.night_shift,
+        sr.graveyard_shift,
         srt.time_info
       FROM surgery_room sr
       LEFT JOIN surgery_room_type srt ON sr.room_type = srt.type
-      WHERE sr.room_type = $1 AND sr.is_available = true
+      WHERE sr.room_type = $1 ${shiftCondition}
       ORDER BY sr.id
     `;
 
@@ -118,8 +173,10 @@ router.get("/type/:roomType", requireAuth, async (req, res) => {
       data: result.rows.map((row) => ({
         id: row.id,
         roomType: row.room_type,
-        isAvailable: row.is_available,
         nurseCount: row.nurse_count,
+        morningShift: row.morning_shift,
+        nightShift: row.night_shift,
+        graveyardShift: row.graveyard_shift,
         timeInfo: row.time_info,
       })),
     });
@@ -141,8 +198,10 @@ router.get("/:roomId", requireAuth, async (req, res) => {
       SELECT 
         sr.id,
         sr.room_type,
-        sr.is_available,
         sr.nurse_count,
+        sr.morning_shift,
+        sr.night_shift,
+        sr.graveyard_shift,
         srt.time_info
       FROM surgery_room sr
       LEFT JOIN surgery_room_type srt ON sr.room_type = srt.type
@@ -165,8 +224,10 @@ router.get("/:roomId", requireAuth, async (req, res) => {
       data: {
         id: room.id,
         roomType: room.room_type,
-        isAvailable: room.is_available,
         nurseCount: room.nurse_count,
+        morningShift: room.morning_shift,
+        nightShift: room.night_shift,
+        graveyardShift: room.graveyard_shift,
         timeInfo: room.time_info,
       },
     });

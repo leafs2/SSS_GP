@@ -63,13 +63,31 @@ const app = express();
 // Session 存儲設定
 const PgSession = connectPgSimple(session);
 
+// CORS 設定（必須在 session 之後）
+app.use(
+  cors({
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "https://localhost:3000",
+      "https://localhost:5173",
+      process.env.FRONTEND_URL,
+    ].filter(Boolean),
+    credentials: true, // 允許帶 Cookie
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Cache-Control"],
+  })
+);
+
+app.use(express.json());
+
 // Session 中介軟體（必須在 cors 和 express.json() 之前）
 app.use(
   session({
     store: new PgSession({
       pool: pool,
       tableName: "sessions",
-      createTableIfMissing: false, // 我們已經手動建立表了
+      createTableIfMissing: false,
     }),
     secret: process.env.SESSION_SECRET || "your-secret-key-change-this",
     resave: false,
@@ -83,24 +101,6 @@ app.use(
     name: "sessionId", // 自訂 Cookie 名稱
   })
 );
-
-// CORS 設定（必須在 session 之後）
-app.use(
-  cors({
-    origin: [
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "https://localhost:3000",
-      "https://localhost:5173",
-      process.env.FRONTEND_URL,
-    ].filter(Boolean),
-    credentials: true, // 允許帶 Cookie
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-
-app.use(express.json());
 
 // 定期清理過期 Session（每小時執行一次）
 cron.schedule("0 * * * *", async () => {

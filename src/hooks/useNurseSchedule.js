@@ -102,7 +102,7 @@ export const useDepartmentNurseSchedules = () => {
 };
 
 // 獲取手術室類型及數量
-export const useSurgeryRoomTypes = () => {
+export const useSurgeryRoomTypes = (shift = null) => {
   const [roomTypes, setRoomTypes] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -112,16 +112,19 @@ export const useSurgeryRoomTypes = () => {
       setIsLoading(true);
       setError(null);
 
-      const response = await fetch(
-        `${API_URL}/api/nurse-schedules/surgery-room-types`,
-        {
-          method: "GET",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      // 如果有時段，加入查詢參數
+      const url = shift
+        ? `${API_URL}/api/nurse-schedules/surgery-room-types?shift=${shift}`
+        : `${API_URL}/api/nurse-schedules/surgery-room-types`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+        },
+      });
 
       const data = await response.json();
 
@@ -129,6 +132,7 @@ export const useSurgeryRoomTypes = () => {
         throw new Error(data.error || "獲取手術室類型失敗");
       }
 
+      console.log(`📋 載入 ${shift} 時段手術室類型:`, data.data);
       setRoomTypes(data.data || []);
     } catch (err) {
       setError(err);
@@ -140,7 +144,7 @@ export const useSurgeryRoomTypes = () => {
 
   useEffect(() => {
     fetchRoomTypes();
-  }, []);
+  }, [shift]); // 依賴 shift
 
   return {
     roomTypes,
@@ -150,8 +154,8 @@ export const useSurgeryRoomTypes = () => {
   };
 };
 
-// 獲取科別所有護士列表
-export const useDepartmentNurses = () => {
+// 獲取科別所有護士列表（排除已在其他時段排班的護士）
+export const useDepartmentNurses = (shift = null) => {
   const [nurses, setNurses] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -161,16 +165,18 @@ export const useDepartmentNurses = () => {
       setIsLoading(true);
       setError(null);
 
-      const response = await fetch(
-        `${API_URL}/api/nurse-schedules/department-nurses`,
-        {
-          method: "GET",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      // 如果有指定時段，加入查詢參數
+      const url = shift
+        ? `${API_URL}/api/nurse-schedules/department-nurses?shift=${shift}`
+        : `${API_URL}/api/nurse-schedules/department-nurses`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
 
       const data = await response.json();
 
@@ -189,7 +195,7 @@ export const useDepartmentNurses = () => {
 
   useEffect(() => {
     fetchNurses();
-  }, []);
+  }, [shift]); // 當 shift 改變時重新獲取
 
   return {
     nurses,
@@ -299,6 +305,9 @@ export const useShiftAssignments = (shift) => {
       setIsLoading(true);
       setError(null);
 
+      // 在切換時段時先清空舊資料，避免顯示錯誤資料
+      setAssignments({});
+
       const response = await fetch(
         `${API_URL}/api/nurse-schedules/shift-assignments/${shift}`,
         {
@@ -306,6 +315,8 @@ export const useShiftAssignments = (shift) => {
           credentials: "include",
           headers: {
             "Content-Type": "application/json",
+            // 加入時間戳避免瀏覽器緩存
+            "Cache-Control": "no-cache",
           },
         }
       );
@@ -316,10 +327,12 @@ export const useShiftAssignments = (shift) => {
         throw new Error(data.error || "獲取排班資料失敗");
       }
 
+      console.log(`✅ 成功載入 ${shift} 時段排班:`, data.data);
       setAssignments(data.data || {});
     } catch (err) {
       setError(err);
       console.error("獲取時段排班資料失敗:", err);
+      setAssignments({}); // 發生錯誤時清空資料
     } finally {
       setIsLoading(false);
     }
@@ -327,7 +340,7 @@ export const useShiftAssignments = (shift) => {
 
   useEffect(() => {
     fetchAssignments();
-  }, [shift]);
+  }, [shift]); // 依賴 shift，當 shift 改變時重新獲取
 
   return {
     assignments,

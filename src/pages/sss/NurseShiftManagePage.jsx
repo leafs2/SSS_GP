@@ -17,7 +17,8 @@ import {
   AlertCircle,
   Info,
   CheckSquare,
-  Square
+  Square,
+  Lock
 } from 'lucide-react';
 import Layout from './components/Layout';
 import PageHeader from './components/PageHeader';
@@ -29,22 +30,22 @@ const NurseShiftManagePage = () => {
   const { user } = useAuth();
   const userDepartment = user?.department_name || '外科部門';
   
-  // 使用真實 API 獲取科別護士列表
+  // 當前選擇的時段
+  const [selectedShift, setSelectedShift] = useState('morning');
+
+  // 使用真實 API 獲取科別護士列表（根據當前時段過濾）
   const { 
     nurses: availableNurses, 
     isLoading: nursesLoading, 
     error: nursesError 
-  } = useDepartmentNurses();
+  } = useDepartmentNurses(selectedShift); // 傳入當前時段
 
-  // 使用真實 API 獲取手術室類型和數量
+  // 使用真實 API 獲取手術室類型和數量（根據時段）
   const { 
     roomTypes: surgeryRoomTypes, 
     isLoading: roomTypesLoading, 
     error: roomTypesError 
-  } = useSurgeryRoomTypes();
-  
-  // 當前選擇的時段
-  const [selectedShift, setSelectedShift] = useState('morning');
+  } = useSurgeryRoomTypes(selectedShift); // 傳入當前時段
 
   // 載入當前時段的排班資料
   const {
@@ -70,39 +71,52 @@ const NurseShiftManagePage = () => {
   // 當手術室類型載入完成後，初始化分配狀態
   useEffect(() => {
     if (surgeryRoomTypes && surgeryRoomTypes.length > 0) {
-      const initialAssignments = {};
-      ['morning', 'evening', 'night'].forEach(shift => {
-        initialAssignments[shift] = {};
-        surgeryRoomTypes.forEach(roomType => {
-          initialAssignments[shift][roomType.type] = [];
-        });
-      });
-      setRoomTypeAssignments(initialAssignments);
-    }
-  }, [surgeryRoomTypes]);
-
-  // 當資料庫排班資料載入完成後，更新到對應的時段
-  useEffect(() => {
-    if (savedAssignments && Object.keys(savedAssignments).length > 0 && surgeryRoomTypes) {
       setRoomTypeAssignments(prev => {
         const updated = { ...prev };
         
-        // 確保當前時段的結構存在
+        // 只更新當前時段的資料
         if (!updated[selectedShift]) {
           updated[selectedShift] = {};
         }
         
-        // 合併資料庫載入的資料
-        Object.keys(savedAssignments).forEach(roomType => {
-          updated[selectedShift][roomType] = savedAssignments[roomType];
-        });
-        
-        // 確保所有手術室類型都有初始化
         surgeryRoomTypes.forEach(roomType => {
           if (!updated[selectedShift][roomType.type]) {
             updated[selectedShift][roomType.type] = [];
           }
         });
+        
+        return updated;
+      });
+    }
+  }, [surgeryRoomTypes, selectedShift]);
+
+  // 當資料庫排班資料載入完成後，更新到對應的時段
+  useEffect(() => {
+    console.log('🔄 savedAssignments 變化:', {
+      shift: selectedShift,
+      data: savedAssignments
+    });
+    
+    if (savedAssignments && surgeryRoomTypes) {
+      setRoomTypeAssignments(prev => {
+        const updated = { ...prev };
+        
+        // 先清空當前時段的資料，避免混入其他時段資料
+        updated[selectedShift] = {};
+        
+        // 初始化所有手術室類型
+        surgeryRoomTypes.forEach(roomType => {
+          updated[selectedShift][roomType.type] = [];
+        });
+        
+        // 只有當 savedAssignments 有資料時才合併
+        if (Object.keys(savedAssignments).length > 0) {
+          Object.keys(savedAssignments).forEach(roomType => {
+            if (savedAssignments[roomType] && Array.isArray(savedAssignments[roomType])) {
+              updated[selectedShift][roomType] = savedAssignments[roomType];
+            }
+          });
+        }
         
         return updated;
       });
@@ -147,6 +161,15 @@ const NurseShiftManagePage = () => {
       default:
         return null;
     }
+  };
+
+  // 檢查手術室是否可在當前時段操作
+  const isRoomAvailableForShift = (roomType) => {
+    // 大夜班只能操作急診（RE）
+    if (selectedShift === 'night') {
+      return roomType === 'RE';
+    }
+    return true;
   };
 
   // 切換勾選護士
@@ -291,18 +314,18 @@ const NurseShiftManagePage = () => {
     });
   };
 
-  // 過濾可用護士
+  // 過濾可用護士（後端API已排除其他時段的護士，這裡排除當前時段所有手術室類型已分配的）
   const getFilteredNurses = () => {
     if (!selectedRoomType || !availableNurses) return [];
     
-    // 收集所有已分配的護士 ID（包含所有手術室類型）
-    const allAssignedIds = new Set();
+    // 收集當前時段所有手術室類型中已分配的護士 ID
+    const currentShiftAssignedIds = new Set();
     Object.values(currentAssignments).forEach(nurses => {
-      nurses.forEach(nurse => allAssignedIds.add(nurse.id));
+      nurses.forEach(nurse => currentShiftAssignedIds.add(nurse.id));
     });
     
     return availableNurses
-      .filter(nurse => !allAssignedIds.has(nurse.id)) // 排除所有已分配的護士
+      .filter(nurse => !currentShiftAssignedIds.has(nurse.id)) // 排除當前時段已分配的護士
       .filter(nurse => 
         nurse.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         nurse.id.toLowerCase().includes(searchQuery.toLowerCase())
@@ -362,6 +385,19 @@ const NurseShiftManagePage = () => {
   const currentShiftInfo = getShiftInfo(selectedShift);
   const currentAssignments = roomTypeAssignments[selectedShift];
 
+  // 計算當前時段的手術室總數
+  const totalRoomsForShift = surgeryRoomTypes?.reduce((sum, rt) => sum + rt.roomCount, 0) || 0;
+
+  // 監控時段切換和排班資料變化，輸出到 console
+  useEffect(() => {
+    console.group(`📋 時段切換: ${currentShiftInfo?.label || selectedShift}`);
+    console.log('當前時段:', selectedShift);
+    console.log('時段資訊:', currentShiftInfo);
+    console.log('當前時段排班資料:', currentAssignments);
+    console.log('所有時段排班資料:', roomTypeAssignments);
+    console.groupEnd();
+  }, [selectedShift, currentAssignments, savedAssignments, surgeryRoomTypes]);
+
   return (
     <Layout>
       <div className="min-h-full bg-gray-50">
@@ -374,7 +410,19 @@ const NurseShiftManagePage = () => {
           <div className="bg-white rounded-lg shadow-md p-6">
             {/* 頂部控制列 */}
             <div className="flex items-center justify-between mb-6 pb-4 border-b border-gray-200">
-              <h2 className="text-lg font-bold text-gray-800">排班設定</h2>
+              <div>
+                <h2 className="text-lg text-left font-bold text-gray-800">排班設定</h2>
+                {selectedShift && (
+                  <p className="text-sm text-gray-600 mt-1">
+                    {currentShiftInfo.label} - 共 {totalRoomsForShift} 間手術室開放
+                    {selectedShift === 'night' && (
+                      <span className="ml-2 text-indigo-600 font-medium">
+                        （僅急診手術室）
+                      </span>
+                    )}
+                  </p>
+                )}
+              </div>
               
               <div className="flex items-center gap-3">
                 <button
@@ -475,18 +523,26 @@ const NurseShiftManagePage = () => {
               ) : surgeryRoomTypes && surgeryRoomTypes.length > 0 ? (
                 surgeryRoomTypes.map(roomTypeData => {
                   const nurses = currentAssignments[roomTypeData.type] || [];
+                  const isAvailable = isRoomAvailableForShift(roomTypeData.type);
                   
                   return (
                     <div 
                       key={roomTypeData.type}
-                      className="border-2 border-gray-200 rounded-lg p-4 hover:border-gray-300 transition-colors"
+                      className={`border-2 rounded-lg p-4 transition-colors ${
+                        isAvailable 
+                          ? 'border-gray-200 hover:border-gray-300' 
+                          : 'border-gray-100 bg-gray-50 opacity-60'
+                      }`}
                     >
                       {/* 手術室類型標題 */}
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
-                          <Building2 className="w-5 h-5 text-blue-600" />
+                          {!isAvailable && (
+                            <Lock className="w-5 h-5 text-gray-400" />
+                          )}
+                          <Building2 className={`w-5 h-5 ${isAvailable ? 'text-blue-600' : 'text-gray-400'}`} />
                           <div className="flex items-center gap-2">
-                            <h3 className="text-base font-bold text-gray-800">
+                            <h3 className={`text-base font-bold ${isAvailable ? 'text-gray-800' : 'text-gray-500'}`}>
                               {roomTypeData.displayName || roomTypeData.type}
                             </h3>
                             {roomTypeData.displayName && (
@@ -495,17 +551,31 @@ const NurseShiftManagePage = () => {
                               </span>
                             )}
                           </div>
-                          <span className="px-2 py-1 bg-blue-100 rounded text-xs text-blue-700 font-medium">
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                            isAvailable 
+                              ? 'bg-blue-100 text-blue-700' 
+                              : 'bg-gray-200 text-gray-500'
+                          }`}>
                             {roomTypeData.roomCount} 間手術室
                           </span>
                           <span className="px-2 py-1 bg-gray-100 rounded text-xs text-gray-600">
                             {nurses.length} 位護士
                           </span>
+                          {!isAvailable && (
+                            <span className="px-2 py-1 bg-red-100 rounded text-xs text-red-600 font-medium">
+                              此時段未開放
+                            </span>
+                          )}
                         </div>
                         
                         <button
                           onClick={() => openAddNurseModal(roomTypeData.type)}
-                          className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
+                          disabled={!isAvailable}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-sm ${
+                            isAvailable
+                              ? 'bg-blue-600 text-white hover:bg-blue-700'
+                              : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          }`}
                         >
                           <Plus className="w-4 h-4" />
                           新增護士
@@ -513,7 +583,7 @@ const NurseShiftManagePage = () => {
                       </div>
 
                       {/* 護士列表 */}
-                      {nurses.length > 0 ? (
+                      {isAvailable && nurses.length > 0 ? (
                         <div className="space-y-3">
                           {nurses.map(nurse => (
                             <div 
@@ -618,11 +688,16 @@ const NurseShiftManagePage = () => {
                             </div>
                           ))}
                         </div>
-                      ) : (
+                      ) : isAvailable ? (
                         <div className="text-center py-8 text-gray-400">
                           <UserPlus className="w-8 h-8 mx-auto mb-2 opacity-50" />
                           <p className="text-sm">尚未新增護士</p>
                           <p className="text-xs mt-1">點擊上方「新增護士」按鈕開始新增</p>
+                        </div>
+                      ) : (
+                        <div className="text-center py-8 text-gray-400">
+                          <Lock className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                          <p className="text-sm">此時段未開放此類型手術室</p>
                         </div>
                       )}
                     </div>
@@ -631,7 +706,7 @@ const NurseShiftManagePage = () => {
               ) : (
                 <div className="text-center py-12 text-gray-400">
                   <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                  <p className="text-sm">暫無手術室類型資料</p>
+                  <p className="text-sm">此時段暫無開放的手術室</p>
                 </div>
               )}
             </div>
@@ -645,10 +720,11 @@ const NurseShiftManagePage = () => {
                 排班輪值管理說明
               </p>
               <p className="text-xs text-blue-600 mt-1">
-                1. 選擇時段（早班/晚班/大夜班）<br />
+                1. 選擇時段（早班 25間 / 晚班 14間 / 大夜班 3間急診）<br />
                 2. 為每個手術室類型新增護士<br />
                 3. 設定每位護士的休假日（每週兩天）<br />
-                4. 點擊「一鍵輪班」自動分配護士到特定手術室
+                4. 點擊「一鍵輪班」自動分配護士到特定手術室<br />
+                5. 大夜班僅開放急診手術室（RE）排班
               </p>
             </div>
           </div>

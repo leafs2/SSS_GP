@@ -3,8 +3,8 @@ import { useState, useEffect } from "react";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
-// 獲取手術室類型和數量
-export const useSurgeryRoomTypes = () => {
+// 獲取手術室類型和數量（可依時段篩選）
+export const useSurgeryRoomTypes = (shift = null) => {
   const [roomTypes, setRoomTypes] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -14,16 +14,18 @@ export const useSurgeryRoomTypes = () => {
       setIsLoading(true);
       setError(null);
 
-      const response = await fetch(
-        `${API_URL}/api/surgery-rooms/types-with-count`,
-        {
-          method: "GET",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      // 如果有指定時段，加入查詢參數
+      const url = shift
+        ? `${API_URL}/api/surgery-rooms/types-with-count?shift=${shift}`
+        : `${API_URL}/api/surgery-rooms/types-with-count`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
 
       const data = await response.json();
 
@@ -42,7 +44,7 @@ export const useSurgeryRoomTypes = () => {
 
   useEffect(() => {
     fetchRoomTypes();
-  }, []);
+  }, [shift]); // 當 shift 改變時重新獲取
 
   return {
     roomTypes,
@@ -98,8 +100,8 @@ export const useAvailableSurgeryRooms = () => {
   };
 };
 
-// 獲取特定類型的手術室
-export const useSurgeryRoomsByType = (roomType) => {
+// 獲取特定類型的手術室（可依時段篩選）
+export const useSurgeryRoomsByType = (roomType, shift = null) => {
   const [rooms, setRooms] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -114,16 +116,19 @@ export const useSurgeryRoomsByType = (roomType) => {
       setIsLoading(true);
       setError(null);
 
-      const response = await fetch(
-        `${API_URL}/api/surgery-rooms/type/${encodeURIComponent(roomType)}`,
-        {
-          method: "GET",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      const url = shift
+        ? `${API_URL}/api/surgery-rooms/type/${encodeURIComponent(
+            roomType
+          )}?shift=${shift}`
+        : `${API_URL}/api/surgery-rooms/type/${encodeURIComponent(roomType)}`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
 
       const data = await response.json();
 
@@ -142,7 +147,7 @@ export const useSurgeryRoomsByType = (roomType) => {
 
   useEffect(() => {
     fetchRooms();
-  }, [roomType]);
+  }, [roomType, shift]);
 
   return {
     rooms,

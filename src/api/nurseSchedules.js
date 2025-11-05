@@ -338,26 +338,66 @@ router.get("/surgery-room-types", requireNurse, async (req, res) => {
   }
 });
 
-// 獲取科別所有護士列表（用於新增護士功能）
+// 獲取科別所有護士列表（用於新增護士功能，排除已在其他時段排班的護士）
 router.get("/department-nurses", requireNurse, async (req, res) => {
   try {
     const departmentCode = req.session.user.department_code;
+    const { shift } = req.query; // 當前選擇的時段
 
-    const query = `
-      SELECT 
-        e.employee_id,
-        e.name,
-        e.department_code,
-        d.name as department_name
-      FROM employees e
-      LEFT JOIN departments d ON e.department_code = d.code
-      WHERE e.department_code = $1 
-        AND e.role = 'N'
-        AND e.status = 'active'
-      ORDER BY e.name
-    `;
+    // 轉換班別為中文
+    const shiftMap = {
+      morning: "早班",
+      evening: "晚班",
+      night: "大夜班",
+    };
+    const currentSchedulingTime = shiftMap[shift];
 
-    const result = await pool.query(query, [departmentCode]);
+    let query;
+    let params;
+
+    if (currentSchedulingTime) {
+      // 排除已在"其他時段"排班的護士
+      // 保留：1) 完全沒排班的護士  2) 已在當前時段排班的護士
+      query = `
+        SELECT 
+          e.employee_id,
+          e.name,
+          e.department_code,
+          d.name as department_name
+        FROM employees e
+        LEFT JOIN departments d ON e.department_code = d.code
+        WHERE e.department_code = $1 
+          AND e.role = 'N'
+          AND e.status = 'active'
+          AND NOT EXISTS (
+            -- 排除在"其他時段"排班的護士
+            SELECT 1 
+            FROM nurse_schedule ns 
+            WHERE ns.employee_id = e.employee_id 
+              AND ns.scheduling_time != $2
+          )
+        ORDER BY e.name
+      `;
+      params = [departmentCode, currentSchedulingTime];
+    } else {
+      // 沒有指定時段，返回所有護士
+      query = `
+        SELECT 
+          e.employee_id,
+          e.name,
+          e.department_code,
+          d.name as department_name
+        FROM employees e
+        LEFT JOIN departments d ON e.department_code = d.code
+        WHERE e.department_code = $1 
+          AND e.role = 'N'
+          AND e.status = 'active'
+        ORDER BY e.name
+      `;
+      params = [departmentCode];
+    }
+
+    const result = await pool.query(query, params);
 
     res.json({
       success: true,
@@ -499,6 +539,27 @@ router.post("/batch-save", requireNurse, async (req, res) => {
         try {
           const { id: employeeId, dayOff } = nurse;
 
+          // 檢查該護士是否已在其他時段排班
+          const checkQuery = `
+            SELECT scheduling_time 
+            FROM nurse_schedule 
+            WHERE employee_id = $1 AND scheduling_time != $2
+          `;
+          const checkResult = await client.query(checkQuery, [
+            employeeId,
+            schedulingTime,
+          ]);
+
+          if (checkResult.rows.length > 0) {
+            errorCount++;
+            errors.push({
+              employeeId: employeeId,
+              nurseName: nurse.name,
+              error: `該護士已在 ${checkResult.rows[0].scheduling_time} 排班，不能重複排班`,
+            });
+            continue;
+          }
+
           // 1. 儲存或更新 nurse_schedule
           const upsertScheduleQuery = `
             INSERT INTO nurse_schedule (employee_id, scheduling_time, surgery_room_type, surgery_room_id)
@@ -556,7 +617,9 @@ router.post("/batch-save", requireNurse, async (req, res) => {
 
     res.json({
       success: true,
-      message: `成功儲存 ${successCount} 位護士的排班`,
+      message: `成功儲存 ${successCount} 位護士的排班${
+        errorCount > 0 ? `，${errorCount} 位失敗` : ""
+      }`,
       data: {
         successCount,
         errorCount,
