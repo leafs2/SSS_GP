@@ -20,6 +20,33 @@ const requireAuth = (req, res, next) => {
   next();
 };
 
+/**
+ * GET /api/surgery-rooms/types
+ * 取得所有手術室類型
+ */
+router.get("/types", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT type, type_code, time_info 
+       FROM surgery_room_type 
+       ORDER BY type_code`
+    );
+
+    res.json({
+      success: true,
+      data: result.rows,
+      total: result.rows.length,
+    });
+  } catch (error) {
+    console.error("取得手術室類型失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: "取得手術室類型失敗",
+      message: error.message,
+    });
+  }
+});
+
 // 獲取所有手術室類型和數量（可依時段篩選）
 router.get("/types-with-count", requireAuth, async (req, res) => {
   try {

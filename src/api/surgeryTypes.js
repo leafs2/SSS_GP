@@ -67,7 +67,7 @@ router.get("/by-department", requireAuth, async (req, res) => {
         internal_code,
         surgery_name,
         default_nurse_count,
-        default_duration_min,
+        default_duration,
         is_active
        FROM surgery_type_code
        WHERE main_subjects = $1 AND is_active = true
@@ -144,7 +144,7 @@ router.get("/my-department", requireAuth, async (req, res) => {
         internal_code,
         surgery_name,
         default_nurse_count,
-        default_duration_min,
+        default_duration,
         is_active
        FROM surgery_type_code
        WHERE main_subjects = $1 AND is_active = true
@@ -187,7 +187,7 @@ router.get("/:surgeryCode", requireAuth, async (req, res) => {
         internal_code,
         surgery_name,
         default_nurse_count,
-        default_duration_min,
+        default_duration,
         is_active
        FROM surgery_type_code
        WHERE surgery_code = $1 AND is_active = true`,
@@ -232,7 +232,7 @@ router.get("/", requireAuth, async (req, res) => {
         internal_code,
         surgery_name,
         default_nurse_count,
-        default_duration_min,
+        default_duration,
         is_active
       FROM surgery_type_code
       WHERE 1=1

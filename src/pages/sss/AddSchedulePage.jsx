@@ -32,6 +32,7 @@ import PageHeader from './components/PageHeader';
 import { useMySchedule } from '../../hooks/useSchedule';
 import { useMySurgeryTypes } from '../../hooks/useSurgeryType';
 import surgeryTypeService from '../../services/surgeryTypeService';
+import surgeryService from '../../services/surgeryService';
 
 const AddSchedulePage = () => {
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -39,6 +40,8 @@ const AddSchedulePage = () => {
   const [recommendedDates, setRecommendedDates] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showRecommendation, setShowRecommendation] = useState(false);
+  const [roomTypes, setRoomTypes] = useState([]);
+  const [loadingRoomTypes, setLoadingRoomTypes] = useState(false);
   
   // 病患預覽對話框
   const [patientPreviewDialog, setPatientPreviewDialog] = useState({
@@ -104,14 +107,27 @@ const AddSchedulePage = () => {
     loadAssistantDoctors();
   }, [department]);
 
-  // 模擬的手術室類型
-  const roomTypes = [
-    '外科手術室',
-    '專科手術室',
-    '達文西手術室',
-    '急診手術室'
-  ];
+  // 載入手術室類型列表
+  useEffect(() => {
+    const loadRoomTypes = async () => {
+      setLoadingRoomTypes(true);
+      try {
+        const response = await fetch('http://localhost:3001/api/surgery-rooms/types');
+        const data = await response.json();
 
+        if (data.success) {
+          setRoomTypes(data.data);
+          console.log('✅ 載入手術室類型:', data.data);
+        }
+      } catch (error) {
+        console.error('❌ 載入手術室類型失敗:', error);
+      } finally {
+        setLoadingRoomTypes(false);
+      }
+    };
+
+    loadRoomTypes();
+  }, []);
   /**
    * 當選擇手術類型時，取得詳細資訊並自動填入預設值
    */
@@ -134,13 +150,13 @@ const AddSchedulePage = () => {
         ...formData,
         surgeryType: surgery.surgery_name,
         surgeryCode: surgery.surgery_code,
-        estimatedHours: surgery.default_duration_min,
+        estimatedHours: surgery.default_duration,
         nurseCount: surgery.default_nurse_count.toString()
       });
       
       console.log('✅ 自動填入預設值:', {
         手術名稱: surgery.surgery_name,
-        預估時間: surgery.default_duration_min,
+        預估時間: surgery.default_duration,
         護士人數: surgery.default_nurse_count
       });
     } catch (error) {
@@ -406,36 +422,58 @@ const AddSchedulePage = () => {
     setSelectedDate(date);
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!selectedDate) {
       alert('請選擇手術日期');
       return;
     }
 
-    // 這裡會送到後端 API
-    const scheduleData = {
-      ...formData,
-      surgeryDate: selectedDate.toISOString(),
-      createdAt: new Date().toISOString()
-    };
+    if (!validateForm()) {
+      alert('請填寫所有必填欄位');
+      return;
+    }
 
-    console.log('提交排程資料:', scheduleData);
-    alert('手術排程已成功新增！');
-    
-    // 重置表單
-    setFormData({
-      patientId: '',
-      patientName: '',
-      patientFound: false,
-      assistantDoctor: '',
-      surgeryType: '',
-      estimatedHours: '',
-      roomType: '',
-      nurseCount: ''
-    });
-    setSelectedDate(null);
-    setRecommendedDates([]);
-    setShowRecommendation(false);
+    try {
+      // 準備送到後端的資料
+      const surgeryData = {
+        patientId: parseInt(formData.patientId),
+        assistantDoctorId: formData.assistantDoctor || null,
+        surgeryTypeCode: formData.surgeryCode,
+        surgeryRoomType: formData.roomType,
+        surgeryDate: selectedDate.toISOString().split('T')[0], // YYYY-MM-DD 格式
+        duration: formData.estimatedHours,
+        nurseCount: parseInt(formData.nurseCount)
+      };
+
+      console.log('📤 送出手術排程資料:', surgeryData);
+
+      // 呼叫 API
+      const result = await surgeryService.createSurgery(surgeryData);
+
+      console.log('✅ 手術排程新增成功:', result);
+      
+      alert(`手術排程已成功新增！\n手術編號：${result.data.surgeryId}`);
+      
+      // 重置表單
+      setFormData({
+        patientId: '',
+        patientName: '',
+        patientFound: false,
+        assistantDoctor: '',
+        surgeryType: '',
+        surgeryCode: '',
+        estimatedHours: '',
+        roomType: '',
+        nurseCount: ''
+      });
+      setSelectedDate(null);
+      setRecommendedDates([]);
+      setShowRecommendation(false);
+
+    } catch (error) {
+      console.error('❌ 新增手術排程失敗:', error);
+      alert(`新增失敗：${error.message || error.error || '未知錯誤'}`);
+    }
   };
 
   const calendarDays = generateCalendar();
@@ -769,24 +807,34 @@ const AddSchedulePage = () => {
               </div>
             </div>
 
-            {/* 手術室類型 */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1 text-left">
-                手術室類型 <span className="text-red-500">*</span>
-              </label>
-              <div className="relative">
-                <DoorOpen className="absolute left-2 top-1/2 transform -translate-y-1/2 w-3 h-3 text-gray-400" />
-                <select
-                  value={formData.roomType}
-                  onChange={(e) => setFormData({...formData, roomType: e.target.value})}
-                  className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent appearance-none text-left"
-                >
-                  <option value="">請選擇手術室類型</option>
-                  {roomTypes.map(type => (
-                    <option key={type} value={type}>{type}</option>
-                  ))}
-                </select>
-              </div>
+          {/* 手術室類型 */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1 text-left">
+              手術室類型 <span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <DoorOpen className="absolute left-2 top-1/2 transform -translate-y-1/2 w-3 h-3 text-gray-400" />
+              <select
+                value={formData.roomType}
+                onChange={(e) => setFormData({...formData, roomType: e.target.value})}
+                disabled={loadingRoomTypes}
+                className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent appearance-none text-left disabled:bg-gray-100"
+              >
+                <option value="">
+                  {loadingRoomTypes ? '載入中...' : '請選擇手術室類型'}
+                </option>
+                {roomTypes.map(type => (
+                  <option key={type.type} value={type.type}>
+                    {type.time_info}手術室
+                  </option>
+                ))}
+              </select>
+            </div>
+            {roomTypes.length === 0 && !loadingRoomTypes && (
+              <p className="mt-1 text-xs text-amber-600">
+                目前無可用的手術室類型
+              </p>
+            )}
             </div>
           </div>
 
