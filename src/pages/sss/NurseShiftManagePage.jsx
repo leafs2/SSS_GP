@@ -25,6 +25,7 @@ import PageHeader from './components/PageHeader';
 import { useAuth } from '../../pages/login/AuthContext';
 import { useDepartmentNurses, saveBatchNurseSchedule, useShiftAssignments } from '../../hooks/useNurseSchedule';
 import { useSurgeryRoomTypes } from '../../hooks/useSurgeryRooms';
+import { assignNursesWithHungarian, checkAlgorithmHealth, formatNursesForAlgorithm, formatRoomsForAlgorithm } from '../../services/algorithmService';
 
 const NurseShiftManagePage = () => {
   const { user } = useAuth();
@@ -60,6 +61,10 @@ const NurseShiftManagePage = () => {
   const [selectedRoomType, setSelectedRoomType] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedNurseIds, setSelectedNurseIds] = useState([]);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleError, setScheduleError] = useState(null);
+  const [algorithmResults, setAlgorithmResults] = useState(null);
   
   // 手術室類型和分配的護士
   const [roomTypeAssignments, setRoomTypeAssignments] = useState({
@@ -334,8 +339,239 @@ const NurseShiftManagePage = () => {
 
   // 一鍵輪班
   const handleAutoSchedule = () => {
-    alert('一鍵輪班功能將會串接演算法，自動分配護士到特定手術室');
-    // TODO: 實作演算法邏輯
+    setShowScheduleModal(true);
+    setScheduleError(null);
+    setAlgorithmResults(null);
+  };
+
+  // 關閉輪班彈窗
+  const closeScheduleModal = () => {
+    setShowScheduleModal(false);
+    setScheduleError(null);
+    setAlgorithmResults(null);
+  };
+
+  // 選項 1: 完整輪班（暫未實作）
+  const handleFullSchedule = () => {
+    alert('完整輪班功能開發中...\n此功能將包含：\n1. 跨週期輪班規劃\n2. 考慮休假歷史\n3. 公平性最佳化');
+    closeScheduleModal();
+  };
+
+  // 選項 2: 使用現有資料進行排班（呼叫匈牙利演算法）
+  const handleQuickSchedule = async () => {
+    try {
+      setScheduleLoading(true);
+      setScheduleError(null);
+      setAlgorithmResults(null);
+
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
+      // 檢查演算法服務是否運行
+      const healthCheck = await checkAlgorithmHealth();
+      if (!healthCheck.healthy) {
+        throw new Error('演算法服務未啟動，請確認 Python 服務是否運行在 http://localhost:8000');
+      }
+
+      // 獲取當前時段的所有手術室類型
+      if (!surgeryRoomTypes || surgeryRoomTypes.length === 0) {
+        throw new Error('當前時段沒有開放的手術室');
+      }
+
+      // 轉換時段名稱
+      const shiftMapping = {
+        'morning': '早班',
+        'evening': '晚班',
+        'night': '大夜'
+      };
+      const shiftName = shiftMapping[selectedShift];
+
+      console.group('🚀 開始匈牙利演算法排班');
+      console.log('時段:', shiftName);
+      console.log('手術室類型:', surgeryRoomTypes);
+
+      const allResults = [];
+      const allAssignments = {};
+
+      // 對每個手術室類型執行演算法
+      for (const roomTypeData of surgeryRoomTypes) {
+        const roomType = roomTypeData.type;
+        
+        // 跳過沒有護士的手術室類型
+        const nurses = currentAssignments[roomType] || [];
+        if (nurses.length === 0) {
+          console.warn(`⚠️ ${roomType} 沒有護士，跳過`);
+          continue;
+        }
+
+        console.log(`\n處理 ${roomType}...`);
+        console.log(`護士數量: ${nurses.length}`);
+
+        // 動態獲取該類型的手術室列表
+        const shiftMapping = {
+          'morning': 'morning_shift',
+          'evening': 'night_shift',
+          'night': 'graveyard_shift'
+        };
+        const dbShift = shiftMapping[selectedShift];
+
+        const roomsResponse = await fetch(
+          `${API_URL}/api/surgery-rooms/type/${encodeURIComponent(roomType)}?shift=${dbShift}`,
+          {
+            method: 'GET',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+            }
+          }
+        );
+
+        if (!roomsResponse.ok) {
+          throw new Error(`無法獲取 ${roomType} 手術室列表`);
+        }
+
+        const roomsData = await roomsResponse.json();
+        const rooms = roomsData.data || [];
+
+        if (rooms.length === 0) {
+          console.warn(`⚠️ ${roomType} 沒有開放的手術室，跳過`);
+          continue;
+        }
+
+        console.log(`手術室數量: ${rooms.length}`);
+
+        // 計算總需求
+        const totalPositions = rooms.reduce((sum, room) => {
+        const nurseCount = parseInt(room.nurse_count || room.nurseCount || 3);
+          console.log(`${room.id}: ${nurseCount} 人`);  // 🔍 除錯用
+          return sum + nurseCount;
+        }, 0);
+
+        console.log(`📊 總需求: ${totalPositions} 人`);  
+        console.log(`👨‍⚕️ 可用護士: ${nurses.length} 人`);  
+
+        // 檢查護士數量是否足夠
+        if (nurses.length < totalPositions) {
+          throw new Error(`${roomType} 護士人數不足：需要 ${totalPositions} 人，但只有 ${nurses.length} 人`);
+        }
+
+        // 格式化資料
+        const formattedNurses = formatNursesForAlgorithm(
+          nurses.map(n => ({
+            ...n,
+            roomType: roomType,
+            schedulingTime: shiftName
+          }))
+        );
+
+        const formattedRooms = formatRoomsForAlgorithm(rooms, roomType);
+
+        console.log('格式化後的護士資料:', formattedNurses);
+        console.log('格式化後的手術室資料:', formattedRooms);
+
+        // 呼叫演算法
+        const result = await assignNursesWithHungarian({
+          shift: shiftName,
+          roomType: roomType,
+          nurses: formattedNurses,
+          rooms: formattedRooms,
+          config: {
+            cost_weights: {
+              familiarity: 0.5,
+              workload: 0.3,
+              experience: 0.2
+            }
+          }
+        });
+
+        if (!result.success) {
+          throw new Error(`${roomType} 分配失敗: ${result.error}`);
+        }
+
+        console.log(`✅ ${roomType} 分配成功:`, result.data);
+
+        allResults.push({
+          roomType: roomType,
+          result: result.data
+        });
+
+        // 儲存分配結果
+        allAssignments[roomType] = result.data.assignments;
+      }
+
+      console.groupEnd();
+
+      if (allResults.length === 0) {
+        throw new Error('沒有可以進行排班的手術室類型');
+      }
+
+      // 儲存結果
+      setAlgorithmResults({
+        results: allResults,
+        assignments: allAssignments
+      });
+
+      alert(`✅ 演算法執行成功！\n\n共處理 ${allResults.length} 個手術室類型\n請查看下方的分配結果`);
+
+    } catch (error) {
+      console.error('❌ 排班失敗:', error);
+      setScheduleError(error.message);
+    } finally {
+      setScheduleLoading(false);
+    }
+  };
+
+  // 應用演算法結果到資料庫
+  const handleApplyAlgorithmResults = async () => {
+    if (!algorithmResults) return;
+
+    try {
+      setScheduleLoading(true);
+
+      // 轉換時段名稱
+      const shiftMapping = {
+        'morning': '早班',
+        'evening': '晚班', 
+        'night': '大夜'
+      };
+      const shiftName = shiftMapping[selectedShift];
+
+      // 呼叫後端 API 更新資料庫
+      const response = await fetch(
+        `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'}/api/nurse-schedules/apply-algorithm-results`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            shift: shiftName,
+            assignments: algorithmResults.assignments
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || '更新資料庫失敗');
+      }
+
+      const data = await response.json();
+      
+      alert(`✅ 成功更新資料庫！\n\n${data.message}`);
+      
+      // 重新載入排班資料
+      refetchAssignments();
+      
+      // 關閉彈窗
+      closeScheduleModal();
+
+    } catch (error) {
+      console.error('更新資料庫失敗:', error);
+      setScheduleError(error.message);
+    } finally {
+      setScheduleLoading(false);
+    }
   };
 
   // 儲存排班設定
@@ -863,6 +1099,223 @@ const NurseShiftManagePage = () => {
                   className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   確認新增 {selectedNurseIds.length > 0 && `(${selectedNurseIds.length})`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 一鍵輪班選項彈窗 */}
+        {showScheduleModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+              {/* 標題 */}
+              <div className="flex items-center justify-between p-6 border-b border-gray-200">
+                <div>
+                  <h3 className="text-xl font-bold text-gray-800">
+                    一鍵輪班
+                  </h3>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {currentShiftInfo.label} · 選擇排班方式
+                  </p>
+                </div>
+                <button
+                  onClick={closeScheduleModal}
+                  disabled={scheduleLoading}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <X className="w-5 h-5 text-gray-600" />
+                </button>
+              </div>
+
+              {/* 內容 */}
+              <div className="flex-1 overflow-y-auto p-6">
+                {/* 錯誤訊息 */}
+                {scheduleError && (
+                  <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="text-sm text-red-800 font-medium">排班失敗</p>
+                      <p className="text-xs text-red-600 mt-1 whitespace-pre-line">{scheduleError}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* 演算法結果 */}
+                {algorithmResults && (
+                  <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="flex items-start gap-3 mb-4">
+                      <CheckSquare className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="text-sm text-green-800 font-medium">演算法執行成功</p>
+                        <p className="text-xs text-green-600 mt-1">
+                          共處理 {algorithmResults.results.length} 個手術室類型
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* 詳細結果 */}
+                    <div className="space-y-3 mt-4">
+                      {algorithmResults.results.map(({ roomType, result }) => (
+                        <div key={roomType} className="bg-white rounded-lg p-3 border border-green-200">
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="font-medium text-gray-800">{roomType}</h4>
+                            <span className="text-xs text-gray-500">
+                              總成本: {result.total_cost.toFixed(2)}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs text-gray-600">
+                            <div>護士數: {result.assignments.length}</div>
+                            <div>手術室數: {Object.keys(result.room_assignments).length}</div>
+                            <div>執行時間: {(result.metadata.execution_time * 1000).toFixed(0)}ms</div>
+                            <div className="text-green-600 font-medium">
+                              {result.metadata.optimal_solution ? '✓ 最佳解' : '⚠ 次佳解'}
+                            </div>
+                          </div>
+
+                          {/* 手術室分配摘要 */}
+                          <div className="mt-3 space-y-1">
+                            {Object.entries(result.room_assignments).map(([roomId, summary]) => (
+                              <div key={roomId} className="flex items-center justify-between text-xs bg-gray-50 rounded px-2 py-1">
+                                <span className="font-medium">{roomId}</span>
+                                <span className="text-gray-600">
+                                  {summary.nurses.length} 位護士
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* 應用結果按鈕 */}
+                    <button
+                      onClick={handleApplyAlgorithmResults}
+                      disabled={scheduleLoading}
+                      className="w-full mt-4 flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {scheduleLoading ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                          更新中...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4" />
+                          應用此分配結果到資料庫
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* 選項卡片 */}
+                {!algorithmResults && (
+                  <div className="space-y-4">
+                    {/* 選項 2: 快速排班（匈牙利演算法）*/}
+                    <button
+                      onClick={handleQuickSchedule}
+                      disabled={scheduleLoading}
+                      className="w-full text-left p-6 border-2 border-blue-200 rounded-lg hover:border-blue-400 hover:bg-blue-50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <div className="flex items-start gap-4">
+                        <div className="p-3 bg-blue-100 rounded-lg group-hover:bg-blue-200 transition-colors">
+                          <Sparkles className="w-6 h-6 text-blue-600" />
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="text-lg font-bold text-gray-800 mb-1">
+                            使用現有資料排班（推薦）
+                          </h4>
+                          <p className="text-sm text-gray-600 mb-3">
+                            使用匈牙利演算法，根據當前已設定的護士和休假日，自動分配到具體手術室
+                          </p>
+                          <div className="space-y-1.5 text-xs text-gray-500">
+                            <div className="flex items-center gap-2">
+                              <CheckSquare className="w-4 h-4 text-green-500" />
+                              <span>考慮護士對手術室的熟悉度</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <CheckSquare className="w-4 h-4 text-green-500" />
+                              <span>平衡護士工作負荷</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <CheckSquare className="w-4 h-4 text-green-500" />
+                              <span>匹配護士資歷與手術室複雜度</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <CheckSquare className="w-4 h-4 text-green-500" />
+                              <span>找到總成本最小的最佳分配方案</span>
+                            </div>
+                          </div>
+                          <div className="mt-3 px-3 py-1.5 bg-blue-100 rounded text-xs text-blue-700 inline-block">
+                            ⚡ 快速執行 · 適合立即使用
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+
+                    {/* 選項 1: 完整輪班（暫未實作）*/}
+                    <button
+                      onClick={handleFullSchedule}
+                      disabled={scheduleLoading}
+                      className="w-full text-left p-6 border-2 border-gray-200 rounded-lg hover:border-gray-300 hover:bg-gray-50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <div className="flex items-start gap-4">
+                        <div className="p-3 bg-gray-100 rounded-lg group-hover:bg-gray-200 transition-colors">
+                          <Building2 className="w-6 h-6 text-gray-600" />
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="text-lg font-bold text-gray-800 mb-1 flex items-center gap-2">
+                            完整輪班規劃
+                            <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded font-medium">
+                              開發中
+                            </span>
+                          </h4>
+                          <p className="text-sm text-gray-600 mb-3">
+                            從零開始規劃整個排班週期，包含護士選擇、休假日設定、手術室分配
+                          </p>
+                          <div className="space-y-1.5 text-xs text-gray-500">
+                            <div className="flex items-center gap-2">
+                              <Square className="w-4 h-4 text-gray-400" />
+                              <span>跨週期輪班規劃</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Square className="w-4 h-4 text-gray-400" />
+                              <span>考慮歷史休假記錄</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Square className="w-4 h-4 text-gray-400" />
+                              <span>公平性最佳化</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Square className="w-4 h-4 text-gray-400" />
+                              <span>自動平衡工作量</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+                )}
+
+                {/* 載入中 */}
+                {scheduleLoading && !algorithmResults && (
+                  <div className="mt-6 flex flex-col items-center justify-center py-8">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+                    <p className="text-sm text-gray-600 font-medium">演算法執行中...</p>
+                    <p className="text-xs text-gray-500 mt-1">這可能需要幾秒鐘</p>
+                  </div>
+                )}
+              </div>
+
+              {/* 底部 */}
+              <div className="p-4 border-t border-gray-200 bg-gray-50">
+                <button
+                  onClick={closeScheduleModal}
+                  disabled={scheduleLoading}
+                  className="w-full px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  關閉
                 </button>
               </div>
             </div>

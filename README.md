@@ -13,4 +13,11 @@ If you are developing a production application, we recommend using TypeScript wi
 
 ## 啟動指令
 
+### 前後端
+
 npm start
+
+### 演算法
+
+cd algorithm
+uvicorn app.main:app --reload --port 8000

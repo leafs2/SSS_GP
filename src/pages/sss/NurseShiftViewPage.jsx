@@ -80,22 +80,34 @@ const NurseShiftViewPage = () => {
   const weekDays = ['週一', '週二', '週三', '週四', '週五', '週六', '週日'];
   const shifts = ['morning', 'evening', 'night'];
 
-  // 整理科別排班資料
+  // 🔧 更新：整理科別排班資料 - 按具體手術室分組
   const organizeDepartmentSchedule = () => {
-    if (!departmentSchedules) return [];
+    if (!departmentSchedules || !nurseSchedule) return [];
 
-    // 按手術室類型分組（surgeryRoomType）
-    const roomTypeMap = new Map();
+    // 只顯示與我同一手術室類型的護士
+    const myRoomType = nurseSchedule.surgeryRoomType;
     
-    departmentSchedules.forEach(nurse => {
-      const roomType = nurse.surgeryRoomType || '未分配';
+    if (!myRoomType) return [];
+
+    // 過濾出同手術室類型的護士
+    const sameTypeNurses = departmentSchedules.filter(
+      nurse => nurse.surgeryRoomType === myRoomType
+    );
+
+    console.log(`📊 同類型護士 (${myRoomType}):`, sameTypeNurses.length);
+
+    // 按具體手術室 ID 分組
+    const roomMap = new Map();
+    
+    sameTypeNurses.forEach(nurse => {
+      const roomId = nurse.surgeryRoom || '尚未分配';
       
-      if (!roomTypeMap.has(roomType)) {
-        roomTypeMap.set(roomType, {
-          roomType: roomType,
-          displayName: nurse.surgeryRoomType || '未分配手術室',
-          isMyRoom: nurse.surgeryRoomType === nurseSchedule?.surgeryRoomType,
-          hasSpecificRoom: false, // 是否有指定準確手術室
+      if (!roomMap.has(roomId)) {
+        roomMap.set(roomId, {
+          roomId: roomId,
+          roomType: nurse.surgeryRoomType,
+          isAssigned: !!nurse.surgeryRoom,
+          isMyRoom: nurse.surgeryRoom === nurseSchedule.surgeryRoom,
           nursesByShift: {
             morning: [],
             evening: [],
@@ -104,25 +116,29 @@ const NurseShiftViewPage = () => {
         });
       }
       
-      const roomData = roomTypeMap.get(roomType);
+      const roomData = roomMap.get(roomId);
       const shift = nurse.shift || 'morning';
       
       if (roomData.nursesByShift[shift]) {
         roomData.nursesByShift[shift].push(nurse);
       }
-      
-      // 檢查是否有準確的手術室 ID
-      if (nurse.surgeryRoom) {
-        roomData.hasSpecificRoom = true;
-      }
     });
 
-    // 轉換為陣列並排序（我的手術室類型優先）
-    const roomSchedules = Array.from(roomTypeMap.values()).sort((a, b) => {
+    // 轉換為陣列並排序
+    const roomSchedules = Array.from(roomMap.values()).sort((a, b) => {
+      // 我的手術室優先
       if (a.isMyRoom && !b.isMyRoom) return -1;
       if (!a.isMyRoom && b.isMyRoom) return 1;
-      return a.roomType.localeCompare(b.roomType);
+      
+      // 已分配的優先於未分配
+      if (a.isAssigned && !b.isAssigned) return -1;
+      if (!a.isAssigned && b.isAssigned) return 1;
+      
+      // 按手術室 ID 排序
+      return a.roomId.localeCompare(b.roomId);
     });
+
+    console.log('🏥 整理後的手術室:', roomSchedules.map(r => r.roomId));
 
     return roomSchedules;
   };
@@ -343,13 +359,22 @@ const NurseShiftViewPage = () => {
               )}
             </div>
 
-            {/* 下方：科別護士排班概況 */}
+            {/* 下方：手術室護士分配概況 */}
             <div className="bg-white rounded-lg shadow-md p-6">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-bold text-gray-800">科別護士排班概況</h2>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800 text-left">
+                    {nurseSchedule?.surgeryRoomType || '手術室'} 護士分配概況
+                  </h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    顯示 {nurseSchedule?.surgeryRoomType || '您的手術室類型'} 各手術室的護士分配情況
+                  </p>
+                </div>
                 <div className="flex items-center gap-2 text-sm text-gray-500">
                   <Users className="w-4 h-4" />
-                  <span>本週總計 {departmentSchedules?.length || 0} 位護士</span>
+                  <span>共 {roomSchedules.reduce((sum, room) => {
+                    return sum + Object.values(room.nursesByShift).flat().length;
+                  }, 0)} 位護士</span>
                 </div>
               </div>
               
@@ -358,32 +383,36 @@ const NurseShiftViewPage = () => {
                   <table className="w-full border-collapse">
                     <thead>
                       <tr>
-                        <th className="border border-gray-300 bg-gray-100 p-3 text-sm font-semibold text-gray-700 w-24">
+                        <th className="border border-gray-300 bg-gray-100 p-3 text-sm font-semibold text-gray-700 w-24 sticky left-0 z-10">
                           班別
                         </th>
                         {roomSchedules.map((room) => (
                           <th 
-                            key={room.roomType}
-                            className={`border border-gray-300 p-3 text-sm font-semibold
+                            key={room.roomId}
+                            className={`border border-gray-300 p-3 text-sm font-semibold min-w-[120px]
                               ${room.isMyRoom 
                                 ? 'bg-blue-100 text-blue-800' 
-                                : 'bg-gray-50 text-gray-700'
+                                : room.isAssigned
+                                  ? 'bg-gray-50 text-gray-700'
+                                  : 'bg-amber-50 text-amber-700'
                               }
                             `}
                           >
                             <div className="flex flex-col items-center gap-1">
                               <Building2 className="w-4 h-4" />
-                              <span>{room.displayName}</span>
-                              {!room.hasSpecificRoom && (
-                                <div className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full mt-1">
+                              <span className="font-bold">
+                                {room.roomId}
+                              </span>
+                              {room.isMyRoom && (
+                                <span className="text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full mt-1">
+                                  我的手術室
+                                </span>
+                              )}
+                              {!room.isAssigned && (
+                                <div className="flex items-center gap-1 text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full mt-1">
                                   <AlertTriangle className="w-3 h-3" />
                                   <span>尚未分配</span>
                                 </div>
-                              )}
-                              {room.isMyRoom && (
-                                <span className="text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full mt-1">
-                                  我的手術室類型
-                                </span>
                               )}
                             </div>
                           </th>
@@ -394,8 +423,8 @@ const NurseShiftViewPage = () => {
                       {shifts.map((shift) => {
                         const shiftInfo = getShiftInfo(shift);
                         return (
-                          <tr key={shift}>
-                            <td className={`border border-gray-300 p-3 ${shiftInfo.bgColor}`}>
+                          <tr key={shift} >
+                            <td className={`border border-gray-300 p-3 ${shiftInfo.bgColor} sticky left-0 z-10`}>
                               <div className="flex items-center justify-center gap-2">
                                 <div className={shiftInfo.iconColor}>
                                   {shiftInfo.icon}
@@ -412,39 +441,49 @@ const NurseShiftViewPage = () => {
                             </td>
                             {roomSchedules.map((room) => {
                               const nurses = room.nursesByShift[shift] || [];
+                              const hasNurses = nurses.length > 0;
+                              
                               return (
                                 <td 
-                                  key={`${room.roomType}-${shift}`}
-                                  className={`border border-gray-300 p-3 align-top
+                                  key={`${room.roomId}-${shift}`}
+                                  className={`border border-gray-300 p-3 align-top 
                                     ${room.isMyRoom ? 'bg-blue-50' : 'bg-white'}
                                   `}
                                 >
-                                  <div className="space-y-1 min-h-[60px]">
-                                    {nurses.length > 0 ? (
-                                      nurses.map((nurse, idx) => (
-                                        <div 
-                                          key={idx}
-                                          className={`text-sm py-1 px-2 rounded
-                                            ${room.isMyRoom && nurse.employeeId === user?.employee_id
-                                              ? 'bg-blue-200 text-blue-900 font-bold'
-                                              : 'text-gray-700 bg-gray-50'
-                                            }
-                                          `}
-                                        >
-                                          <div className="text-center">
-                                            {nurse.name}
-                                            {nurse.employeeId === user?.employee_id && ' (我)'}
-                                          </div>
-                                          {nurse.dayOffWeek && nurse.dayOffWeek.length > 0 && (
-                                            <div className="text-xs text-gray-500 text-center mt-0.5">
-                                              休假: {nurse.dayOffWeek.map(d => weekDays[d]).join('、')}
-                                            </div>
-                                          )}
+                                  <div className="space-y-1.5" style={{ maxHeight: '200px' }}>
+                                    {hasNurses ? (
+                                      <>
+                                        <div className="text-xs text-gray-500 text-center mb-2">
+                                          共 {nurses.length} 人
                                         </div>
-                                      ))
+                                        {nurses.map((nurse, idx) => (
+                                          <div 
+                                            key={idx}
+                                            className={`text-sm py-1.5 px-2 rounded
+                                              ${room.isMyRoom && nurse.employeeId === user?.employee_id
+                                                ? 'bg-blue-200 text-blue-900 font-bold border-2 border-blue-400'
+                                                : 'text-gray-700 bg-gray-50 border border-gray-200'
+                                              }
+                                            `}
+                                          >
+                                            <div className="text-center font-medium">
+                                              {nurse.name}
+                                              {nurse.employeeId === user?.employee_id && ' ⭐'}
+                                            </div>
+                                            {nurse.dayOffWeek && nurse.dayOffWeek.length > 0 && (
+                                              <div className="text-xs text-gray-500 text-center mt-0.5">
+                                                休 : {nurse.dayOffWeek.map(d => weekDays[d].replace('週', '')).join('、')}
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </>
                                     ) : (
-                                      <div className="text-xs text-gray-400 text-center py-4">
-                                        無排班
+                                      <div className="flex flex-col items-center justify-center py-6">
+                                        <AlertCircle className="w-6 h-6 text-gray-300 mb-2" />
+                                        <div className="text-xs text-gray-400 text-center">
+                                          此時段<br />無排班
+                                        </div>
                                       </div>
                                     )}
                                   </div>
@@ -458,8 +497,12 @@ const NurseShiftViewPage = () => {
                   </table>
                 </div>
               ) : (
-                <div className="flex items-center justify-center h-40 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
-                  <p className="text-gray-400">暫無科別排班資料</p>
+                <div className="flex flex-col items-center justify-center h-40 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
+                  <AlertCircle className="w-8 h-8 text-gray-400 mb-2" />
+                  <p className="text-gray-500">暫無手術室分配資料</p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {!nurseSchedule?.surgeryRoomType && '您尚未被分配到手術室類型'}
+                  </p>
                 </div>
               )}
             </div>

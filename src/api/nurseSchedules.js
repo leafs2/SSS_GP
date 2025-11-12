@@ -425,7 +425,7 @@ router.get("/surgery-rooms", requireNurse, async (req, res) => {
         sr.id,
         sr.room_type,
         sr.is_available,
-        sr.nurse_count,
+        sr.nurse_count::integer as nurse_count,
         srt.time_info
       FROM surgery_room sr
       LEFT JOIN surgery_room_type srt ON sr.room_type = srt.type
@@ -441,7 +441,7 @@ router.get("/surgery-rooms", requireNurse, async (req, res) => {
         id: row.id,
         roomType: row.room_type,
         isAvailable: row.is_available,
-        nurseCount: row.nurse_count,
+        nurseCount: parseInt(row.nurse_count),
         timeInfo: row.time_info,
       })),
     });
@@ -633,6 +633,103 @@ router.post("/batch-save", requireNurse, async (req, res) => {
       success: false,
       error: "儲存排班失敗",
       details: error.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// 在 src/api/nurseSchedules.js 中加入這個新端點
+
+/**
+ * POST /api/nurse-schedules/apply-algorithm-results
+ * 應用演算法分配結果到資料庫
+ */
+router.post("/apply-algorithm-results", requireNurse, async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { shift, assignments } = req.body;
+
+    // 驗證輸入
+    if (!shift || !assignments) {
+      return res.status(400).json({
+        success: false,
+        error: "缺少必要參數",
+      });
+    }
+
+    console.log("📥 收到演算法結果:", {
+      shift,
+      assignmentKeys: Object.keys(assignments),
+    });
+
+    await client.query("BEGIN");
+
+    let totalUpdated = 0;
+    const updateDetails = [];
+
+    // 處理每個手術室類型的分配結果
+    for (const [roomType, nurseAssignments] of Object.entries(assignments)) {
+      console.log(`\n處理 ${roomType}...`);
+
+      for (const assignment of nurseAssignments) {
+        // 更新資料庫
+        const result = await client.query(
+          `
+          UPDATE nurse_schedule 
+          SET surgery_room_id = $1
+          WHERE employee_id = $2 
+            AND scheduling_time = $3
+            AND surgery_room_type = $4
+          RETURNING *
+        `,
+          [
+            assignment.assigned_room, // 分配的手術室 ID
+            assignment.employee_id, // 護士員工編號
+            shift, // 時段
+            roomType, // 手術室類型
+          ]
+        );
+
+        if (result.rowCount > 0) {
+          totalUpdated++;
+          updateDetails.push({
+            employeeId: assignment.employee_id,
+            nurseName: assignment.nurse_name,
+            assignedRoom: assignment.assigned_room,
+            position: assignment.position,
+            cost: assignment.cost,
+          });
+
+          console.log(
+            `  ✅ ${assignment.nurse_name} → ${assignment.assigned_room} (位置 ${assignment.position})`
+          );
+        } else {
+          console.warn(`  ⚠️ 找不到記錄: ${assignment.employee_id}`);
+        }
+      }
+    }
+
+    await client.query("COMMIT");
+
+    console.log(`\n✅ 成功更新 ${totalUpdated} 筆記錄`);
+
+    res.json({
+      success: true,
+      message: `成功更新 ${totalUpdated} 位護士的手術室分配`,
+      data: {
+        totalUpdated,
+        details: updateDetails,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("應用演算法結果失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: "更新資料庫失敗",
+      message: error.message,
     });
   } finally {
     client.release();
