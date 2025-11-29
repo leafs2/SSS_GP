@@ -1,15 +1,19 @@
 """
-Assignment API
+Assignment API - Enhanced with Float Nurse Scheduling
 
-匈牙利演算法分配相關的 API 端點
+匈牙利演算法分配相關的 API 端點（含流動護士排班）
 """
 
 from fastapi import APIRouter, HTTPException, status
+from typing import List, Dict
 from ..models.assignment import (
     HungarianAssignmentRequest,
-    HungarianAssignmentResponse
+    HungarianAssignmentResponse,
+    FloatNurseScheduleRequest,
+    FloatNurseScheduleResponse
 )
 from ..algorithms.assignment.hungarian_solver import HungarianSolver
+from ..algorithms.assignment.float_nurse_scheduler import FloatNurseScheduler
 
 router = APIRouter(prefix="/api/assignment", tags=["assignment"])
 
@@ -24,19 +28,7 @@ async def hungarian_assignment(
     request: HungarianAssignmentRequest
 ) -> HungarianAssignmentResponse:
     """
-    匈牙利演算法護士分配
-    
-    根據成本矩陣（考慮熟悉度、工作負荷、資歷匹配）
-    將護士最佳化分配到手術室職位
-    
-    Args:
-        request: 分配請求（包含護士、手術室、配置）
-        
-    Returns:
-        分配結果（包含護士分配、手術室摘要、成本資訊）
-        
-    Raises:
-        HTTPException: 當輸入資料不合法或演算法執行失敗時
+    匈牙利演算法護士分配（固定護士）
     """
     try:
         # 驗證輸入資料
@@ -50,16 +42,6 @@ async def hungarian_assignment(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="手術室列表不能為空"
-            )
-        
-        # 驗證護士和手術室的類型是否一致
-        nurse_room_types = {nurse.room_type for nurse in request.nurses}
-        room_room_types = {room.room_type for room in request.rooms}
-        
-        if nurse_room_types != room_room_types:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"護士手術室類型 {nurse_room_types} 與手術室類型 {room_room_types} 不一致"
             )
         
         # 計算總需求
@@ -93,13 +75,81 @@ async def hungarian_assignment(
         return response
         
     except HTTPException:
-        # 重新拋出 HTTP 異常
         raise
     except Exception as e:
-        # 捕獲其他異常並回傳 500 錯誤
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"演算法執行失敗: {str(e)}"
+        )
+
+
+@router.post(
+    "/float-nurse-schedule",
+    response_model=FloatNurseScheduleResponse,
+    summary="流動護士排班",
+    description="根據固定護士的休假情況，分配流動護士填補空缺"
+)
+async def float_nurse_schedule(
+    request: FloatNurseScheduleRequest
+) -> FloatNurseScheduleResponse:
+    """
+    流動護士排班
+    
+    在固定護士分配完成後，計算每日空缺並分配流動護士
+    """
+    try:
+        if not request.float_nurses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="流動護士列表不能為空"
+            )
+        
+        if not request.fixed_assignments:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="固定護士分配結果不能為空"
+            )
+        
+        # 創建流動護士排班器
+        scheduler = FloatNurseScheduler()
+        
+        # 步驟 1: 計算每日空缺
+        vacancies = scheduler.calculate_daily_vacancies(
+            fixed_assignments=request.fixed_assignments,
+            room_requirements=request.room_requirements
+        )
+        
+        # 步驟 2: 分配流動護士
+        strategy = request.config.get("strategy", "balanced") if request.config else "balanced"
+        
+        assignments = scheduler.assign_float_nurses(
+            float_nurses=request.float_nurses,
+            vacancies=vacancies,
+            strategy=strategy
+        )
+        
+        # 步驟 3: 格式化結果
+        schedule_records = scheduler.format_float_schedule(assignments)
+        
+        # 步驟 4: 生成報告
+        report = scheduler.generate_float_schedule_report(
+            assignments=assignments,
+            float_nurses=request.float_nurses
+        )
+        
+        return FloatNurseScheduleResponse(
+            success=True,
+            schedule=schedule_records,
+            vacancies=vacancies,
+            summary=report
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"流動護士排班失敗: {str(e)}"
         )
 
 
@@ -111,13 +161,10 @@ async def hungarian_assignment(
 async def assignment_health():
     """
     分配服務健康檢查
-    
-    Returns:
-        服務狀態資訊
     """
     return {
         "status": "healthy",
         "service": "assignment",
-        "algorithms": ["hungarian"],
-        "version": "1.0.0"
+        "algorithms": ["hungarian", "float_nurse_schedule"],
+        "version": "2.0.0"
     }

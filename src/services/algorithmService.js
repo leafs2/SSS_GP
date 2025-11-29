@@ -112,28 +112,101 @@ export const formatNursesForAlgorithm = (nurses) => {
 
 /**
  * 格式化手術室資料為演算法服務需要的格式
- * @param {Array} rooms - 前端手術室資料
+ * @param {Array} rooms - 前端手術室資料（應該已經被過濾為該時段開放的手術室）
  * @param {string} roomType - 手術室類型
+ * @param {string} shift - 時段（用於取得正確的護士需求數量）
  * @returns {Array} 格式化後的手術室資料
  */
-export const formatRoomsForAlgorithm = (rooms, roomType) => {
-  return rooms.map((room) => ({
-    room_id: room.id,
-    room_type: roomType,
-    require_nurses: parseInt(room.nurseCount || room.nurse_count || 3),
-    complexity: determineComplexity(room),
-    recent_activity: 0.5,
-  }));
+export const formatRoomsForAlgorithm = (rooms, roomType, shift) => {
+  // 時段開放狀態欄位對應
+  const shiftOpenFieldMapping = {
+    morning: "morningShift",
+    evening: "nightShift",
+    night: "graveyardShift",
+  };
+  const openField = shiftOpenFieldMapping[shift];
+
+  return rooms
+    .filter((room) => {
+      // 雙重檢查：確保手術室在該時段開放
+      const isOpen = room[openField] === true || room[openField] === 1;
+      if (!isOpen) {
+        console.warn(`⚠️ 手術室 ${room.id} 在 ${shift} 時段未開放，已過濾`);
+      }
+      return isOpen;
+    })
+    .map((room) => {
+      // 🔥 關鍵修改：根據時段取得正確的護士需求數量
+      const requireNurses = getNurseCountByShift(room, shift);
+
+      console.log(
+        `🏥 手術室 ${room.id} (${shift}): 需要 ${requireNurses} 位護士`,
+        {
+          room_data: room,
+          shift: shift,
+          is_open: room[openField],
+          calculated_count: requireNurses,
+        }
+      );
+
+      return {
+        room_id: room.id,
+        room_type: roomType,
+        require_nurses: requireNurses,
+        complexity: determineComplexity(requireNurses),
+        recent_activity: 0.5,
+      };
+    });
 };
 
 /**
- * 判斷手術室複雜度
+ * 根據時段取得手術室需要的護士數量
  * @param {Object} room - 手術室資料
+ * @param {string} shift - 時段（morning/evening/night）
+ * @returns {number} 護士需求數量
+ */
+const getNurseCountByShift = (room, shift) => {
+  // 時段欄位對應表
+  const shiftFieldMapping = {
+    morning: "morning_shift_nurses",
+    evening: "night_shift_nurses",
+    night: "graveyard_shift_nurses",
+  };
+
+  const fieldName = shiftFieldMapping[shift];
+
+  // 1. 優先使用時段專屬欄位
+  if (fieldName && room[fieldName] !== undefined && room[fieldName] !== null) {
+    return parseInt(room[fieldName]);
+  }
+
+  // 2. 備用：使用通用欄位（可能來自後端）
+  if (room.nurseCount !== undefined && room.nurseCount !== null) {
+    return parseInt(room.nurseCount);
+  }
+  if (room.nurse_count !== undefined && room.nurse_count !== null) {
+    return parseInt(room.nurse_count);
+  }
+
+  // 3. 最終預設值（根據時段）
+  const defaultCounts = {
+    morning: 3,
+    evening: 2,
+    night: 1,
+  };
+
+  console.warn(
+    `⚠️ 手術室 ${room.id} 沒有 ${shift} 時段的護士數量資料，使用預設值 ${defaultCounts[shift]}`
+  );
+  return defaultCounts[shift];
+};
+
+/**
+ * 判斷手術室複雜度（根據護士需求數量）
+ * @param {number} nurseCount - 護士需求數量
  * @returns {string} 複雜度 (low/medium/high)
  */
-const determineComplexity = (room) => {
-  const nurseCount = room.nurseCount || room.nurse_count || 3;
-
+const determineComplexity = (nurseCount) => {
   if (nurseCount >= 3) {
     return "high";
   } else if (nurseCount === 2) {

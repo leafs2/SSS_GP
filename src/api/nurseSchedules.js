@@ -736,4 +736,437 @@ router.post("/apply-algorithm-results", requireNurse, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/nurse-schedules/apply-float-schedule
+ * 應用流動護士排班結果到資料庫
+ */
+router.post("/apply-float-schedule", requireNurse, async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { shift, floatSchedules } = req.body;
+
+    if (!shift || !floatSchedules) {
+      return res.status(400).json({
+        success: false,
+        error: "缺少必要參數：shift, floatSchedules",
+      });
+    }
+
+    console.log("📝 開始應用流動護士排班:", { shift, floatSchedules });
+
+    // 轉換班別為中文
+    const shiftMap = {
+      morning: "早班",
+      evening: "晚班",
+      night: "大夜班",
+    };
+    const schedulingTime = shiftMap[shift];
+
+    await client.query("BEGIN");
+
+    // 步驟 1: 刪除該時段的舊流動護士記錄
+    const { rows: shiftNurses } = await client.query(
+      `SELECT employee_id FROM nurse_schedule WHERE scheduling_time = $1`,
+      [schedulingTime]
+    );
+
+    const employeeIds = shiftNurses.map((n) => n.employee_id);
+
+    if (employeeIds.length > 0) {
+      await client.query(
+        `DELETE FROM nurse_float WHERE employee_id = ANY($1)`,
+        [employeeIds]
+      );
+      console.log(`✅ 已清除 ${employeeIds.length} 位護士的舊流動記錄`);
+    }
+
+    // 步驟 2: 插入新的流動護士記錄
+    const floatRecords = [];
+
+    for (const roomType in floatSchedules) {
+      const scheduleData = floatSchedules[roomType];
+
+      if (scheduleData.schedule && scheduleData.schedule.length > 0) {
+        scheduleData.schedule.forEach((record) => {
+          floatRecords.push({
+            employee_id: record.employee_id,
+            mon: record.mon || null,
+            tues: record.tues || null,
+            wed: record.wed || null,
+            thu: record.thu || null,
+            fri: record.fri || null,
+            sat: record.sat || null,
+            sun: record.sun || null,
+          });
+        });
+      }
+    }
+
+    if (floatRecords.length === 0) {
+      await client.query("COMMIT");
+      return res.json({
+        success: true,
+        message: "沒有流動護士需要更新",
+        data: { insertedCount: 0 },
+      });
+    }
+
+    // 批次插入
+    let insertedCount = 0;
+    for (const record of floatRecords) {
+      const result = await client.query(
+        `
+        INSERT INTO nurse_float (employee_id, mon, tues, wed, thu, fri, sat, sun)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
+      `,
+        [
+          record.employee_id,
+          record.mon,
+          record.tues,
+          record.wed,
+          record.thu,
+          record.fri,
+          record.sat,
+          record.sun,
+        ]
+      );
+
+      if (result.rowCount > 0) {
+        insertedCount++;
+      }
+    }
+
+    await client.query("COMMIT");
+
+    console.log(`✅ 成功插入 ${insertedCount} 筆流動護士記錄`);
+
+    res.json({
+      success: true,
+      message: `成功更新 ${insertedCount} 位流動護士的排班`,
+      data: {
+        insertedCount,
+        records: floatRecords,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("應用流動護士排班失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "應用流動護士排班失敗",
+    });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * GET /api/nurse-schedules/float-schedule/:shift
+ * 獲取指定時段的流動護士排班
+ */
+router.get("/float-schedule/:shift", requireNurse, async (req, res) => {
+  try {
+    const { shift } = req.params;
+
+    // 轉換班別為中文
+    const shiftMap = {
+      morning: "早班",
+      evening: "晚班",
+      night: "大夜班",
+    };
+    const schedulingTime = shiftMap[shift];
+
+    if (!schedulingTime) {
+      return res.status(400).json({
+        success: false,
+        error: "無效的班別",
+      });
+    }
+
+    // 先獲取該時段的所有護士
+    const { rows: shiftNurses } = await pool.query(
+      `
+      SELECT e.employee_id, e.name
+      FROM nurse_schedule ns
+      JOIN employees e ON ns.employee_id = e.employee_id
+      WHERE ns.scheduling_time = $1
+    `,
+      [schedulingTime]
+    );
+
+    if (!shiftNurses || shiftNurses.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+      });
+    }
+
+    const employeeIds = shiftNurses.map((n) => n.employee_id);
+
+    // 獲取流動護士排班
+    const { rows: floatSchedules } = await pool.query(
+      `
+      SELECT * FROM nurse_float
+      WHERE employee_id = ANY($1)
+    `,
+      [employeeIds]
+    );
+
+    // 合併護士姓名
+    const enrichedSchedules = floatSchedules.map((schedule) => {
+      const nurse = shiftNurses.find(
+        (n) => n.employee_id === schedule.employee_id
+      );
+      return {
+        ...schedule,
+        name: nurse?.name || "",
+      };
+    });
+
+    res.json({
+      success: true,
+      data: enrichedSchedules,
+    });
+  } catch (error) {
+    console.error("獲取流動護士排班失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "獲取流動護士排班失敗",
+    });
+  }
+});
+
+/**
+ * DELETE /api/nurse-schedules/clear-shift/:shift
+ * 清除指定時段的所有排班資料（包含固定和流動）
+ */
+router.delete("/clear-shift/:shift", requireNurse, async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { shift } = req.params;
+    const departmentCode = req.session.user.department_code;
+
+    // 轉換班別為中文
+    const shiftMap = {
+      morning: "早班",
+      evening: "晚班",
+      night: "大夜班",
+    };
+    const schedulingTime = shiftMap[shift];
+
+    if (!schedulingTime) {
+      return res.status(400).json({
+        success: false,
+        error: "無效的班別",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    // 步驟 1: 找出該科別該時段的所有護士
+    const { rows: nurses } = await client.query(
+      `
+      SELECT ns.employee_id
+      FROM nurse_schedule ns
+      JOIN employees e ON ns.employee_id = e.employee_id
+      WHERE ns.scheduling_time = $1 
+        AND e.department_code = $2
+    `,
+      [schedulingTime, departmentCode]
+    );
+
+    if (nurses.length === 0) {
+      await client.query("COMMIT");
+      return res.json({
+        success: true,
+        message: "該時段沒有排班資料",
+        data: { clearedCount: 0 },
+      });
+    }
+
+    const employeeIds = nurses.map((n) => n.employee_id);
+
+    // 步驟 2: 刪除流動護士記錄
+    const floatResult = await client.query(
+      `DELETE FROM nurse_float WHERE employee_id = ANY($1)`,
+      [employeeIds]
+    );
+
+    // 步驟 3: 清除 nurse_schedule 的 surgery_room_id（保留基本排班資訊）
+    const scheduleResult = await client.query(
+      `
+      UPDATE nurse_schedule 
+      SET surgery_room_id = NULL
+      WHERE employee_id = ANY($1) 
+        AND scheduling_time = $2
+    `,
+      [employeeIds, schedulingTime]
+    );
+
+    // 或者完全刪除 nurse_schedule 記錄（如果你希望重新開始）
+    // const scheduleResult = await client.query(
+    //   `DELETE FROM nurse_schedule WHERE employee_id = ANY($1) AND scheduling_time = $2`,
+    //   [employeeIds, schedulingTime]
+    // );
+
+    await client.query("COMMIT");
+
+    console.log(
+      `✅ 已清除 ${shift} 時段的排班資料: ${floatResult.rowCount} 筆流動記錄, ${scheduleResult.rowCount} 筆固定分配`
+    );
+
+    res.json({
+      success: true,
+      message: `成功清除 ${shift} 時段的排班資料`,
+      data: {
+        clearedFloatCount: floatResult.rowCount,
+        clearedScheduleCount: scheduleResult.rowCount,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("清除時段排班失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "清除排班失敗",
+    });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * GET /api/nurse-schedules/nurse/:employeeId/complete
+ * 獲取單一護士的完整排班資訊（包含固定手術室和流動軌跡）
+ */
+router.get("/nurse/:employeeId/complete", requireNurse, async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+
+    // 查詢固定排班
+    const { rows: schedules } = await pool.query(
+      `
+      SELECT 
+        ns.scheduling_time,
+        ns.surgery_room_type,
+        ns.surgery_room_id,
+        COALESCE(
+          array_agg(nd.day_off ORDER BY nd.day_off) FILTER (WHERE nd.day_off IS NOT NULL),
+          ARRAY[]::bigint[]
+        ) as day_off_ids
+      FROM nurse_schedule ns
+      LEFT JOIN nurse_dayoff nd ON ns.employee_id = nd.id
+      WHERE ns.employee_id = $1
+      GROUP BY ns.scheduling_time, ns.surgery_room_type, ns.surgery_room_id
+    `,
+      [employeeId]
+    );
+
+    // 查詢流動排班
+    const { rows: floatSchedules } = await pool.query(
+      `SELECT * FROM nurse_float WHERE employee_id = $1`,
+      [employeeId]
+    );
+
+    // 查詢護士基本資訊
+    const { rows: nurses } = await pool.query(
+      `SELECT employee_id, name FROM employees WHERE employee_id = $1`,
+      [employeeId]
+    );
+
+    if (nurses.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "找不到該護士",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        employeeId: nurses[0].employee_id,
+        name: nurses[0].name,
+        schedules: schedules.map((s) => ({
+          shift: s.scheduling_time,
+          roomType: s.surgery_room_type,
+          fixedRoom: s.surgery_room_id,
+          dayOff: s.day_off_ids.map((id) => id - 1), // 轉換為 0-6
+        })),
+        floatSchedules: floatSchedules,
+      },
+    });
+  } catch (error) {
+    console.error("獲取護士完整排班失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "獲取護士排班失敗",
+    });
+  }
+});
+
+/**
+ * GET /api/nurse-schedules/shift-vacancy/:shift
+ * 獲取指定時段每間手術室的空缺情況
+ */
+router.get("/shift-vacancy/:shift", requireNurse, async (req, res) => {
+  try {
+    const { shift } = req.params;
+
+    // 轉換班別
+    const shiftMap = {
+      morning: "早班",
+      evening: "晚班",
+      night: "大夜班",
+    };
+    const schedulingTime = shiftMap[shift];
+
+    // 查詢每間手術室的需求和實際分配人數
+    const { rows: vacancies } = await pool.query(
+      `
+      WITH room_requirements AS (
+        SELECT 
+          sr.id as room_id,
+          sr.room_type,
+          sr.nurse_count as required_count
+        FROM surgery_room sr
+        WHERE sr.is_available = true
+      ),
+      assigned_nurses AS (
+        SELECT 
+          ns.surgery_room_id as room_id,
+          COUNT(DISTINCT ns.employee_id) as assigned_count
+        FROM nurse_schedule ns
+        WHERE ns.scheduling_time = $1
+          AND ns.surgery_room_id IS NOT NULL
+        GROUP BY ns.surgery_room_id
+      )
+      SELECT 
+        rr.room_id,
+        rr.room_type,
+        rr.required_count,
+        COALESCE(an.assigned_count, 0) as assigned_count,
+        (rr.required_count - COALESCE(an.assigned_count, 0)) as vacancy_count
+      FROM room_requirements rr
+      LEFT JOIN assigned_nurses an ON rr.room_id = an.room_id
+      ORDER BY rr.room_id
+    `,
+      [schedulingTime]
+    );
+
+    res.json({
+      success: true,
+      data: vacancies,
+    });
+  } catch (error) {
+    console.error("獲取時段空缺統計失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "獲取空缺統計失敗",
+    });
+  }
+});
+
 export default router;

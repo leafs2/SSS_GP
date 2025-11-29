@@ -150,3 +150,226 @@ class HungarianAssignmentResponse(BaseModel):
                 }
             }
         }
+
+"""
+Float Nurse Schedule Models
+
+流動護士排班相關的 Pydantic 資料模型
+"""
+
+class FloatNurseInput(BaseModel):
+    """
+    流動護士輸入模型
+    """
+    employee_id: str = Field(..., description="護士員工編號")
+    name: Optional[str] = Field(None, description="護士姓名")
+    day_off: List[int] = Field(..., description="休假日索引列表 (0=週一, 6=週日)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "employee_id": "NOT0061",
+                "name": "張三",
+                "day_off": [5, 6]  # 週六、週日休假
+            }
+        }
+
+
+class FixedNurseAssignment(BaseModel):
+    """
+    固定護士分配（用於計算空缺）
+    """
+    employee_id: str
+    day_off: List[int]
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "employee_id": "NOT0001",
+                "day_off": [6]  # 週日休假
+            }
+        }
+
+
+class FloatNurseScheduleRequest(BaseModel):
+    """
+    流動護士排班請求
+    """
+    shift: str = Field(..., description="時段 (早班/晚班/大夜)")
+    room_type: str = Field(..., description="手術室類型")
+    
+    float_nurses: List[FloatNurseInput] = Field(
+        ..., 
+        description="流動護士列表（surgery_room_id = null 的護士）"
+    )
+    
+    fixed_assignments: Dict[str, List[FixedNurseAssignment]] = Field(
+        ...,
+        description="固定護士分配結果（按手術室分組）"
+    )
+    
+    room_requirements: Dict[str, int] = Field(
+        ...,
+        description="每間手術室需要的護士數量"
+    )
+    
+    config: Optional[Dict] = Field(
+        default_factory=lambda: {"strategy": "balanced"},
+        description="排班配置"
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "shift": "早班",
+                "room_type": "RSU",
+                "float_nurses": [
+                    {
+                        "employee_id": "NOT0061",
+                        "name": "張三",
+                        "day_off": [5, 6]
+                    }
+                ],
+                "fixed_assignments": {
+                    "RSU01": [
+                        {"employee_id": "NOT0001", "day_off": [6]},
+                        {"employee_id": "NOT0002", "day_off": [5, 6]}
+                    ]
+                },
+                "room_requirements": {
+                    "RSU01": 3,
+                    "RSU02": 3
+                },
+                "config": {
+                    "strategy": "balanced"
+                }
+            }
+        }
+
+
+class FloatScheduleRecord(BaseModel):
+    """
+    單一流動護士的排班記錄
+    """
+    employee_id: str
+    mon: Optional[str] = None
+    tues: Optional[str] = None
+    wed: Optional[str] = None
+    thu: Optional[str] = None
+    fri: Optional[str] = None
+    sat: Optional[str] = None
+    sun: Optional[str] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "employee_id": "NOT0061",
+                "mon": "RSU01",
+                "tues": "RSU02",
+                "wed": "RSU01",
+                "thu": "RSU03",
+                "fri": "RSU02",
+                "sat": None,
+                "sun": None
+            }
+        }
+
+
+class FloatNurseSummary(BaseModel):
+    """
+    單一流動護士的工作摘要
+    """
+    employee_id: str
+    name: str
+    work_days: int
+    schedule: Dict[str, Optional[str]]
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "employee_id": "NOT0061",
+                "name": "張三",
+                "work_days": 5,
+                "schedule": {
+                    "mon": "RSU01",
+                    "tues": "RSU02",
+                    "wed": "RSU01",
+                    "thu": "RSU03",
+                    "fri": "RSU02",
+                    "sat": None,
+                    "sun": None
+                }
+            }
+        }
+
+
+class FloatNurseScheduleResponse(BaseModel):
+    """
+    流動護士排班回應
+    """
+    success: bool = Field(..., description="是否成功")
+    
+    schedule: List[FloatScheduleRecord] = Field(
+        ...,
+        description="流動護士排班記錄（可直接寫入 nurse_float 表）"
+    )
+    
+    vacancies: Dict[str, Dict[str, int]] = Field(
+        ...,
+        description="每日空缺情況"
+    )
+    
+    summary: Dict = Field(
+        ...,
+        description="排班摘要統計"
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "schedule": [
+                    {
+                        "employee_id": "NOT0061",
+                        "mon": "RSU01",
+                        "tues": "RSU02",
+                        "wed": None,
+                        "thu": "RSU03",
+                        "fri": "RSU02",
+                        "sat": None,
+                        "sun": None
+                    }
+                ],
+                "vacancies": {
+                    "RSU01": {
+                        "mon": 0,
+                        "tues": 0,
+                        "wed": 1,
+                        "thu": 0,
+                        "fri": 0,
+                        "sat": 2,
+                        "sun": 2
+                    }
+                },
+                "summary": {
+                    "total_float_nurses": 10,
+                    "total_assignments": 35,
+                    "nurses": [
+                        {
+                            "employee_id": "NOT0061",
+                            "name": "張三",
+                            "work_days": 5,
+                            "schedule": {
+                                "mon": "RSU01",
+                                "tues": "RSU02",
+                                "wed": "RSU01",
+                                "thu": "RSU03",
+                                "fri": "RSU02",
+                                "sat": None,
+                                "sun": None
+                            }
+                        }
+                    ]
+                }
+            }
+        }

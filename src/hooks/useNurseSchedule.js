@@ -349,3 +349,180 @@ export const useShiftAssignments = (shift) => {
     refetch: fetchAssignments,
   };
 };
+
+/**
+ * 獲取流動護士排班資料
+ */
+export const useFloatSchedule = (shift) => {
+  const [floatSchedules, setFloatSchedules] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchFloatSchedules = async () => {
+    // 🔥 修正：如果沒有指定 shift，獲取所有時段的流動護士
+    if (!shift) {
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      // 🔥 可選：獲取所有時段的流動護士（如果需要）
+      const shifts = ["morning", "evening", "night"];
+      const allSchedules = [];
+
+      for (const s of shifts) {
+        const response = await fetch(
+          `${API_URL}/api/nurse-schedules/float-schedule/${s}`,
+          {
+            method: "GET",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "獲取流動護士排班失敗");
+        }
+
+        // 🔥 修正：為每個流動護士加上時段資訊
+        const schedulesWithShift = (data.data || []).map((schedule) => ({
+          ...schedule,
+          shift: s, // 加入時段資訊
+        }));
+
+        allSchedules.push(...schedulesWithShift);
+      }
+
+      console.log(`✅ 成功載入流動護士排班:`, allSchedules);
+      setFloatSchedules(allSchedules);
+    } catch (err) {
+      setError(err);
+      console.error("獲取流動護士排班失敗:", err);
+      setFloatSchedules([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchFloatSchedules();
+  }, [shift]);
+
+  return {
+    floatSchedules,
+    isLoading,
+    error,
+    refetch: fetchFloatSchedules,
+  };
+};
+
+/**
+ * 獲取完整的排班資訊（包含固定和流動護士）
+ */
+export const useCompleteSchedule = (shift, surgeryRoomType) => {
+  const [completeSchedule, setCompleteSchedule] = useState({
+    fixedNurses: [],
+    floatNurses: [],
+    roomAssignments: {},
+  });
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchCompleteSchedule = async () => {
+    if (!shift || !surgeryRoomType) {
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      // 同時獲取固定排班和流動排班
+      const [fixedResponse, floatResponse] = await Promise.all([
+        fetch(`${API_URL}/api/nurse-schedules/shift-assignments/${shift}`, {
+          method: "GET",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+        }),
+        fetch(`${API_URL}/api/nurse-schedules/float-schedule/${shift}`, {
+          method: "GET",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+        }),
+      ]);
+
+      const fixedData = await fixedResponse.json();
+      const floatData = await floatResponse.json();
+
+      if (!fixedResponse.ok || !floatData.ok) {
+        throw new Error("獲取排班資料失敗");
+      }
+
+      // 整理資料
+      const fixedNurses = fixedData.data[surgeryRoomType] || [];
+      const floatNurses = floatData.data || [];
+
+      // 建立手術室分配映射
+      const roomAssignments = {};
+
+      // 固定護士
+      fixedNurses.forEach((nurse) => {
+        const roomId = nurse.surgeryRoomId || "unassigned";
+        if (!roomAssignments[roomId]) {
+          roomAssignments[roomId] = { fixed: [], float: {} };
+        }
+        roomAssignments[roomId].fixed.push(nurse);
+      });
+
+      // 流動護士（按天分配）
+      floatNurses.forEach((nurse) => {
+        const days = ["mon", "tues", "wed", "thu", "fri", "sat", "sun"];
+        days.forEach((day, index) => {
+          const roomId = nurse[day];
+          if (roomId) {
+            if (!roomAssignments[roomId]) {
+              roomAssignments[roomId] = { fixed: [], float: {} };
+            }
+            if (!roomAssignments[roomId].float[index]) {
+              roomAssignments[roomId].float[index] = [];
+            }
+            roomAssignments[roomId].float[index].push({
+              ...nurse,
+              dayIndex: index,
+            });
+          }
+        });
+      });
+
+      setCompleteSchedule({
+        fixedNurses,
+        floatNurses,
+        roomAssignments,
+      });
+    } catch (err) {
+      setError(err);
+      console.error("獲取完整排班失敗:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCompleteSchedule();
+  }, [shift, surgeryRoomType]);
+
+  return {
+    completeSchedule,
+    isLoading,
+    error,
+    refetch: fetchCompleteSchedule,
+  };
+};

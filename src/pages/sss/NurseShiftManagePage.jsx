@@ -18,6 +18,7 @@ import {
   Info,
   CheckSquare,
   Square,
+  Shuffle,
   Lock
 } from 'lucide-react';
 import Layout from './components/Layout';
@@ -365,19 +366,18 @@ const NurseShiftManagePage = () => {
       setAlgorithmResults(null);
 
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const ALGORITHM_API_URL = import.meta.env.VITE_ALGORITHM_API_URL || 'http://localhost:8000';
 
-      // 檢查演算法服務是否運行
+      // 檢查演算法服務
       const healthCheck = await checkAlgorithmHealth();
       if (!healthCheck.healthy) {
-        throw new Error('演算法服務未啟動，請確認 Python 服務是否運行在 http://localhost:8000');
+        throw new Error('演算法服務未啟動');
       }
 
-      // 獲取當前時段的所有手術室類型
       if (!surgeryRoomTypes || surgeryRoomTypes.length === 0) {
         throw new Error('當前時段沒有開放的手術室');
       }
 
-      // 轉換時段名稱
       const shiftMapping = {
         'morning': '早班',
         'evening': '晚班',
@@ -385,43 +385,39 @@ const NurseShiftManagePage = () => {
       };
       const shiftName = shiftMapping[selectedShift];
 
-      console.group('🚀 開始匈牙利演算法排班');
+      console.group('🚀 開始完整排班流程');
       console.log('時段:', shiftName);
-      console.log('手術室類型:', surgeryRoomTypes);
 
       const allResults = [];
       const allAssignments = {};
+      const allFloatSchedules = {};
 
-      // 對每個手術室類型執行演算法
+      // 對每個手術室類型執行排班
       for (const roomTypeData of surgeryRoomTypes) {
         const roomType = roomTypeData.type;
-        
-        // 跳過沒有護士的手術室類型
         const nurses = currentAssignments[roomType] || [];
+        
         if (nurses.length === 0) {
           console.warn(`⚠️ ${roomType} 沒有護士，跳過`);
           continue;
         }
 
-        console.log(`\n處理 ${roomType}...`);
-        console.log(`護士數量: ${nurses.length}`);
+        console.log(`\n━━━ 處理 ${roomType} ━━━`);
 
-        // 動態獲取該類型的手術室列表
-        const shiftMapping = {
+        // === 步驟 1: 獲取手術室列表並過濾 ===
+        const dbShiftMapping = {
           'morning': 'morning_shift',
           'evening': 'night_shift',
           'night': 'graveyard_shift'
         };
-        const dbShift = shiftMapping[selectedShift];
+        const dbShift = dbShiftMapping[selectedShift];
 
         const roomsResponse = await fetch(
           `${API_URL}/api/surgery-rooms/type/${encodeURIComponent(roomType)}?shift=${dbShift}`,
           {
             method: 'GET',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-            }
+            headers: { 'Content-Type': 'application/json' }
           }
         );
 
@@ -430,31 +426,26 @@ const NurseShiftManagePage = () => {
         }
 
         const roomsData = await roomsResponse.json();
-        const rooms = roomsData.data || [];
+        const allRooms = roomsData.data || [];
+
+        // 過濾該時段開放的手術室
+        const shiftFieldMapping = {
+          'morning': 'morningShift',
+          'evening': 'nightShift',
+          'night': 'graveyardShift'
+        };
+        const shiftField = shiftFieldMapping[selectedShift];
+
+        const rooms = allRooms.filter(room => room[shiftField] === true || room[shiftField] === 1);
 
         if (rooms.length === 0) {
-          console.warn(`⚠️ ${roomType} 沒有開放的手術室，跳過`);
+          console.warn(`⚠️ ${roomType} 在 ${selectedShift} 時段沒有開放的手術室`);
           continue;
         }
 
         console.log(`手術室數量: ${rooms.length}`);
 
-        // 計算總需求
-        const totalPositions = rooms.reduce((sum, room) => {
-        const nurseCount = parseInt(room.nurse_count || room.nurseCount || 3);
-          console.log(`${room.id}: ${nurseCount} 人`);  // 🔍 除錯用
-          return sum + nurseCount;
-        }, 0);
-
-        console.log(`📊 總需求: ${totalPositions} 人`);  
-        console.log(`👨‍⚕️ 可用護士: ${nurses.length} 人`);  
-
-        // 檢查護士數量是否足夠
-        if (nurses.length < totalPositions) {
-          throw new Error(`${roomType} 護士人數不足：需要 ${totalPositions} 人，但只有 ${nurses.length} 人`);
-        }
-
-        // 格式化資料
+        // === 步驟 2: 執行匈牙利演算法（固定護士分配）===
         const formattedNurses = formatNursesForAlgorithm(
           nurses.map(n => ({
             ...n,
@@ -463,13 +454,9 @@ const NurseShiftManagePage = () => {
           }))
         );
 
-        const formattedRooms = formatRoomsForAlgorithm(rooms, roomType);
+        const formattedRooms = formatRoomsForAlgorithm(rooms, roomType, selectedShift);
 
-        console.log('格式化後的護士資料:', formattedNurses);
-        console.log('格式化後的手術室資料:', formattedRooms);
-
-        // 呼叫演算法
-        const result = await assignNursesWithHungarian({
+        const hungarianResult = await assignNursesWithHungarian({
           shift: shiftName,
           roomType: roomType,
           nurses: formattedNurses,
@@ -483,19 +470,108 @@ const NurseShiftManagePage = () => {
           }
         });
 
-        if (!result.success) {
-          throw new Error(`${roomType} 分配失敗: ${result.error}`);
+        if (!hungarianResult.success) {
+          throw new Error(`${roomType} 固定護士分配失敗: ${hungarianResult.error}`);
         }
 
-        console.log(`✅ ${roomType} 分配成功:`, result.data);
+        console.log(`✅ 固定護士分配完成`);
 
+        const fixedAssignments = hungarianResult.data.assignments;
         allResults.push({
           roomType: roomType,
-          result: result.data
+          result: hungarianResult.data
         });
 
-        // 儲存分配結果
-        allAssignments[roomType] = result.data.assignments;
+        // === 步驟 3: 識別流動護士（surgery_room_id = null） ===
+        const assignedNurseIds = new Set(
+          fixedAssignments.map(a => a.employee_id)
+        );
+
+        const floatNurses = nurses
+          .filter(n => !assignedNurseIds.has(n.id))
+          .map(n => ({
+            employee_id: n.id,
+            name: n.name,
+            day_off: n.dayOff || []
+          }));
+
+        console.log(`流動護士數量: ${floatNurses.length}`);
+
+        if (floatNurses.length === 0) {
+          console.log('⏭️ 沒有流動護士，跳過流動排班');
+          allAssignments[roomType] = fixedAssignments;
+          continue;
+        }
+
+        // === 步驟 4: 準備固定護士資料（用於計算空缺） ===
+        const fixedAssignmentsByRoom = {};
+        const roomRequirements = {};
+
+        // 按手術室分組固定護士
+        fixedAssignments.forEach(assignment => {
+          const roomId = assignment.assigned_room;
+          
+          if (!fixedAssignmentsByRoom[roomId]) {
+            fixedAssignmentsByRoom[roomId] = [];
+          }
+
+          // 找到原始護士資料（包含 dayOff）
+          const nurseData = nurses.find(n => n.id === assignment.employee_id);
+          
+          fixedAssignmentsByRoom[roomId].push({
+            employee_id: assignment.employee_id,
+            day_off: nurseData?.dayOff || []
+          });
+        });
+
+        // 設定每間手術室的需求人數
+        rooms.forEach(room => {
+          const nurseField = {
+            'morning': 'morning_shift_nurses',
+            'evening': 'night_shift_nurses',
+            'night': 'graveyard_shift_nurses'
+          }[selectedShift];
+
+          roomRequirements[room.id] = parseInt(
+            room[nurseField] || room.nurse_count || room.nurseCount || 3
+          );
+        });
+
+        console.log('手術室需求:', roomRequirements);
+
+        // === 步驟 5: 呼叫流動護士排班 API ===
+        const floatScheduleResponse = await fetch(
+          `${ALGORITHM_API_URL}/api/assignment/float-nurse-schedule`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              shift: shiftName,
+              room_type: roomType,
+              float_nurses: floatNurses,
+              fixed_assignments: fixedAssignmentsByRoom,
+              room_requirements: roomRequirements,
+              config: {
+                strategy: 'balanced'  // 可選: 'balanced' 或 'room_priority'
+              }
+            })
+          }
+        );
+
+        if (!floatScheduleResponse.ok) {
+          const errorData = await floatScheduleResponse.json().catch(() => ({}));
+          throw new Error(`流動護士排班失敗: ${errorData.detail || '未知錯誤'}`);
+        }
+
+        const floatScheduleData = await floatScheduleResponse.json();
+
+        console.log(`✅ 流動護士排班完成`);
+        console.log('空缺情況:', floatScheduleData.vacancies);
+        console.log('流動護士排班:', floatScheduleData.schedule);
+
+        // === 步驟 6: 合併結果 ===
+        allAssignments[roomType] = fixedAssignments;
+        allFloatSchedules[roomType] = floatScheduleData;
       }
 
       console.groupEnd();
@@ -507,10 +583,14 @@ const NurseShiftManagePage = () => {
       // 儲存結果
       setAlgorithmResults({
         results: allResults,
-        assignments: allAssignments
+        assignments: allAssignments,
+        floatSchedules: allFloatSchedules  // 新增流動護士排班結果
       });
 
-      alert(`✅ 演算法執行成功！\n\n共處理 ${allResults.length} 個手術室類型\n請查看下方的分配結果`);
+      alert(`✅ 完整排班成功！\n\n` +
+        `固定護士分配: ${allResults.length} 個手術室類型\n` +
+        `流動護士排班: ${Object.keys(allFloatSchedules).length} 個手術室類型`
+      );
 
     } catch (error) {
       console.error('❌ 排班失敗:', error);
@@ -520,30 +600,28 @@ const NurseShiftManagePage = () => {
     }
   };
 
-  // 應用演算法結果到資料庫
+
+  // 應用完整排班結果到資料庫
   const handleApplyAlgorithmResults = async () => {
     if (!algorithmResults) return;
 
     try {
       setScheduleLoading(true);
 
-      // 轉換時段名稱
       const shiftMapping = {
         'morning': '早班',
-        'evening': '晚班', 
+        'evening': '晚班',
         'night': '大夜'
       };
       const shiftName = shiftMapping[selectedShift];
 
-      // 呼叫後端 API 更新資料庫
-      const response = await fetch(
+      // 步驟 1: 更新固定護士分配
+      const fixedResponse = await fetch(
         `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'}/api/nurse-schedules/apply-algorithm-results`,
         {
           method: 'POST',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             shift: shiftName,
             assignments: algorithmResults.assignments
@@ -551,14 +629,37 @@ const NurseShiftManagePage = () => {
         }
       );
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || '更新資料庫失敗');
+      if (!fixedResponse.ok) {
+        const errorData = await fixedResponse.json();
+        throw new Error(errorData.error || '更新固定護士失敗');
       }
 
-      const data = await response.json();
-      
-      alert(`✅ 成功更新資料庫！\n\n${data.message}`);
+      console.log('✅ 固定護士分配已更新');
+
+      // 步驟 2: 更新流動護士排班
+      if (algorithmResults.floatSchedules && Object.keys(algorithmResults.floatSchedules).length > 0) {
+        const floatResponse = await fetch(
+          `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'}/api/nurse-schedules/apply-float-schedule`,
+          {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              shift: shiftName,
+              floatSchedules: algorithmResults.floatSchedules
+            })
+          }
+        );
+
+        if (!floatResponse.ok) {
+          const errorData = await floatResponse.json();
+          throw new Error(errorData.error || '更新流動護士失敗');
+        }
+
+        console.log('✅ 流動護士排班已更新');
+      }
+
+      alert(`✅ 成功更新資料庫！\n\n包含固定護士和流動護士排班`);
       
       // 重新載入排班資料
       refetchAssignments();
@@ -573,6 +674,7 @@ const NurseShiftManagePage = () => {
       setScheduleLoading(false);
     }
   };
+
 
   // 儲存排班設定
   const handleSave = async () => {
@@ -1149,41 +1251,201 @@ const NurseShiftManagePage = () => {
                       <div className="flex-1">
                         <p className="text-sm text-green-800 font-medium">演算法執行成功</p>
                         <p className="text-xs text-green-600 mt-1">
-                          共處理 {algorithmResults.results.length} 個手術室類型
+                          {currentShiftInfo.label} - 共處理 {algorithmResults.results.length} 個手術室類型
                         </p>
                       </div>
                     </div>
 
                     {/* 詳細結果 */}
-                    <div className="space-y-3 mt-4">
+                    <div className="space-y-4 mt-4 max-h-[60vh] overflow-y-auto">
                       {algorithmResults.results.map(({ roomType, result }) => (
-                        <div key={roomType} className="bg-white rounded-lg p-3 border border-green-200">
-                          <div className="flex items-center justify-between mb-2">
-                            <h4 className="font-medium text-gray-800">{roomType}</h4>
-                            <span className="text-xs text-gray-500">
-                              總成本: {result.total_cost.toFixed(2)}
-                            </span>
-                          </div>
-                          <div className="grid grid-cols-2 gap-2 text-xs text-gray-600">
-                            <div>護士數: {result.assignments.length}</div>
-                            <div>手術室數: {Object.keys(result.room_assignments).length}</div>
-                            <div>執行時間: {(result.metadata.execution_time * 1000).toFixed(0)}ms</div>
-                            <div className="text-green-600 font-medium">
-                              {result.metadata.optimal_solution ? '✓ 最佳解' : '⚠ 次佳解'}
+                        <div key={roomType} className="bg-white rounded-lg p-4 border border-green-200">
+                          {/* 手術室類型標題 */}
+                          <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-200">
+                            <div className="flex items-center gap-2">
+                              <Building2 className="w-5 h-5 text-blue-600" />
+                              <h4 className="font-bold text-gray-800 text-base">{roomType}</h4>
+                              <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded font-medium">
+                                {currentShiftInfo.label}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-gray-500">
+                              <span>總成本: {result.total_cost.toFixed(2)}</span>
+                              <span>執行時間: {(result.metadata.execution_time * 1000).toFixed(0)}ms</span>
+                              <span className={result.metadata.optimal_solution ? 'text-green-600 font-medium' : 'text-amber-600 font-medium'}>
+                                {result.metadata.optimal_solution ? '✓ 最佳解' : '⚠ 次佳解'}
+                              </span>
                             </div>
                           </div>
 
-                          {/* 手術室分配摘要 */}
-                          <div className="mt-3 space-y-1">
+                          {/* 統計摘要 */}
+                          <div className="grid grid-cols-3 gap-3 mb-3">
+                            <div className="bg-blue-50 rounded p-2">
+                              <p className="text-xs text-gray-600">固定護士</p>
+                              <p className="text-lg font-bold text-blue-700">
+                                {result.assignments.filter(a => a.assigned_room).length}
+                              </p>
+                            </div>
+                            <div className="bg-purple-50 rounded p-2">
+                              <p className="text-xs text-gray-600">流動護士</p>
+                              <p className="text-lg font-bold text-purple-700">
+                                {algorithmResults.floatSchedules[roomType].summary?.total_float_nurses}
+                              </p>
+                            </div>
+                            <div className="bg-gray-50 rounded p-2">
+                              <p className="text-xs text-gray-600">手術室數</p>
+                              <p className="text-lg font-bold text-gray-700">
+                                {Object.keys(result.room_assignments).length}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* 手術室分配詳情 */}
+                          <div className="space-y-2">
+                            <p className="text-xs font-medium text-gray-600 mb-2">手術室分配詳情：</p>
                             {Object.entries(result.room_assignments).map(([roomId, summary]) => (
-                              <div key={roomId} className="flex items-center justify-between text-xs bg-gray-50 rounded px-2 py-1">
-                                <span className="font-medium">{roomId}</span>
-                                <span className="text-gray-600">
-                                  {summary.nurses.length} 位護士
-                                </span>
+                              <div key={roomId} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-gray-800">{roomId}</span>
+                                    <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded">
+                                      {summary.nurses.length} 位護士
+                                    </span>
+                                    {summary.complexity && (
+                                      <span className={`px-2 py-0.5 text-xs rounded ${
+                                        summary.complexity === 'high' 
+                                          ? 'bg-red-100 text-red-700'
+                                          : summary.complexity === 'medium'
+                                            ? 'bg-amber-100 text-amber-700'
+                                            : 'bg-green-100 text-green-700'
+                                      }`}>
+                                        {summary.complexity === 'high' ? '高複雜度' : summary.complexity === 'medium' ? '中複雜度' : '低複雜度'}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-xs text-gray-500">
+                                    總成本: {summary.total_cost?.toFixed(2) || '0.00'}
+                                  </span>
+                                </div>
+                                
+                                {/* 護士列表 */}
+                                <div className="space-y-1.5 mt-2">
+                                  {summary.nurses.map((nurse, idx) => {
+                                    // 找到對應的完整分配資料
+                                    const fullAssignment = result.assignments.find(
+                                      a => a.employee_id === nurse && a.assigned_room === roomId
+                                    );
+                                    const nurseName = fullAssignment?.nurse_name || '未知';
+                                    return (
+                                      <div key={idx} className="flex items-center justify-between bg-white rounded px-3 py-2 border border-gray-200">
+                                        <div className="flex items-center gap-3">
+                                          <span className="text-sm font-medium text-gray-800">
+                                            {nurseName}
+                                          </span>
+                                          <span className="text-xs text-gray-500">
+                                            ({nurse || fullAssignment?.employee_id})
+                                          </span>
+                                          {fullAssignment?.position && (
+                                            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded">
+                                              位置 {fullAssignment.position}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-3 text-xs text-gray-500">
+                                          {fullAssignment && (
+                                            <>
+                                              <span>成本: {fullAssignment.cost?.toFixed(2) || '0.00'}</span>
+                                              {fullAssignment.cost_breakdown && (
+                                                <span className="text-gray-400">
+                                                  (熟悉度:{fullAssignment.cost_breakdown.familiarity?.toFixed(1)} 
+                                                  + 負荷:{fullAssignment.cost_breakdown.workload?.toFixed(1)}
+                                                  + 資歷:{fullAssignment.cost_breakdown.experience?.toFixed(1)})
+                                                </span>
+                                              )}
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             ))}
                           </div>
+
+                          {/* 流動護士分配詳情 */}
+                          {algorithmResults.floatSchedules && algorithmResults.floatSchedules[roomType] && (
+                            <div className="mt-3 pt-3 border-t border-gray-200">
+                              <p className="text-xs font-medium text-purple-600 mb-2 flex items-center gap-1">
+                                <Shuffle className="w-3 h-3" />
+                                流動護士排班詳情：
+                              </p>
+                              <div className="bg-purple-50 rounded-lg p-3 border border-purple-200">
+                                <div className="grid grid-cols-2 gap-2 text-xs mb-2">
+                                  <div>
+                                    <span className="text-gray-600">流動護士數：</span>
+                                    <span className="font-medium text-purple-700 ml-1">
+                                      {algorithmResults.floatSchedules[roomType].summary?.total_float_nurses || 0}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-600">總分配次數：</span>
+                                    <span className="font-medium text-purple-700 ml-1">
+                                      {algorithmResults.floatSchedules[roomType].summary?.total_assignments || 0}
+                                    </span>
+                                  </div>
+                                </div>
+                                
+                                {/* 流動護士每日分配 */}
+                                {algorithmResults.floatSchedules[roomType].schedule && 
+                                 algorithmResults.floatSchedules[roomType].schedule.length > 0 && (
+                                  <div className="space-y-1.5 mt-2">
+                                    {algorithmResults.floatSchedules[roomType].schedule.map((floatNurse, idx) => {
+                                      const nurseData  = currentAssignments[roomType].find(
+                                        n => n.id === floatNurse.employee_id
+                                      );
+                                      const nurseName = nurseData?.name || '未知';
+
+                                      const workDays = ['mon', 'tues', 'wed', 'thu', 'fri', 'sat', 'sun'].filter(
+                                        day => floatNurse[day] && floatNurse[day] !== null
+                                      ).length;
+
+                                      return (    
+                                      <div key={idx} className="bg-white rounded px-3 py-2 border border-purple-200">
+                                        <div className="flex items-center justify-between mb-1">
+                                          <span className="text-sm font-medium text-purple-800">
+                                            {nurseName} ({floatNurse.employee_id})
+                                          </span>
+                                          <span className="text-xs text-purple-600">
+                                            工作 {workDays} 天
+                                          </span>
+                                        </div>
+                                        <div className="flex gap-1 text-xs">
+                                          {['mon', 'tues', 'wed', 'thu', 'fri', 'sat', 'sun'].map((day, dayIdx) => {
+                                            const room = floatNurse[day];
+                                            const dayLabel = ['一', '二', '三', '四', '五', '六', '日'][dayIdx];
+                                            return (
+                                              <div 
+                                                key={day} 
+                                                className={`flex-1 text-center py-1 rounded ${
+                                                  room 
+                                                    ? 'bg-purple-100 text-purple-700 font-medium' 
+                                                    : 'bg-gray-100 text-gray-400'
+                                                }`}
+                                              >
+                                                <div>{dayLabel}</div>
+                                                <div className="text-xs">{room || '-'}</div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                  )})}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
