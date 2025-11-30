@@ -20,4 +20,8 @@ npm start
 ### 演算法
 
 cd algorithm
+
+#### 啟動虛擬環境
+
+.\venv\Scripts\Activate.ps1 (Windows)
 uvicorn app.main:app --reload --port 8000

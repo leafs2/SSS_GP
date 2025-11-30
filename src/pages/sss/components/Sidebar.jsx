@@ -72,7 +72,7 @@ const Sidebar = () => {
         submenu: [
           { 
             id: 'nurse-shift-view', 
-            title: '排班規劃', 
+            title: '本週排班', 
             icon: Calendar, 
             path: '/sss/nurse/shift/view' 
           },
@@ -82,6 +82,30 @@ const Sidebar = () => {
               title: '排班輪值', 
               icon: Settings, 
               path: '/sss/nurse/shift/manage',
+              requirePermission: '1'
+            }
+          ] : [])
+        ]
+      }
+    ] : user?.role === 'A' ? [
+      {
+        id: 'shift-planning',
+        title: '排班規劃',
+        icon: Users,
+        defaultPath: '/sss/assistant/shift/view',
+        submenu: [
+          { 
+            id: 'assistant-shift-view', 
+            title: '本月排班', 
+            icon: Calendar, 
+            path: '/sss/assistant/shift/view' 
+          },
+          ...(user?.permission === '1' ? [
+            { 
+              id: 'assistant-shift-manage', 
+              title: '排班管理', 
+              icon: Settings, 
+              path: '/sss/assistant/shift/manage',
               requirePermission: '1'
             }
           ] : [])
@@ -100,7 +124,7 @@ const Sidebar = () => {
   const toggleSidebar = () => {
     setIsOpen(!isOpen);
     if (!isOpen) {
-      setOpenSubmenu(['personal', 'hospital']);
+      setOpenSubmenu(['personal', 'hospital', 'shift-planning']);
     } else {
       setOpenSubmenu([]);
     }

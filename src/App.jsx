@@ -16,6 +16,8 @@ import PatientManagementPage from './pages/sss/PatientManagementPage';
 import AddPatientPage from './pages/sss/AddPatientPage';
 import NurseShiftViewPage from './pages/sss/NurseShiftViewPage';
 import NurseShiftManagePage from './pages/sss/NurseShiftManagePage';
+import AssistantShiftViewPage from './pages/sss/AssistantShiftViewPage';
+import AssistantShiftManagePage from './pages/sss/AssistantShiftManagePage';
 import './App.css'
 
 function App() {
@@ -68,7 +70,7 @@ function App() {
           <Route 
             path="/sss/nurse/shift/view" 
             element={
-              <ProtectedRoute >
+              <ProtectedRoute>
                 <NurseShiftViewPage />
               </ProtectedRoute>
             } 
@@ -78,6 +80,24 @@ function App() {
             element={
               <ProtectedRoute requirePermission="1">
                 <NurseShiftManagePage />
+              </ProtectedRoute>
+            } 
+          />
+          
+          {/* 助理醫生排班相關路由 */}
+          <Route 
+            path="/sss/assistant/shift/view" 
+            element={
+              <ProtectedRoute>
+                <AssistantShiftViewPage />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/sss/assistant/shift/manage" 
+            element={
+              <ProtectedRoute requirePermission="1">
+                <AssistantShiftManagePage />
               </ProtectedRoute>
             } 
           />
