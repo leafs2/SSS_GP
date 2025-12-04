@@ -14,6 +14,7 @@ import {
   AlertCircle,
   Briefcase,
   Home,
+  Users,
 } from 'lucide-react'
 import Layout from './components/Layout'
 import PageHeader from './components/PageHeader'
@@ -148,7 +149,7 @@ const AssistantShiftViewPage = () => {
     // 找出最後一次值班日期
     const lastDutyDate = getLastDutyDate()
     const isAfterLastDuty = lastDutyDate && dateStr > lastDutyDate
-
+    
     // 檢查當週是否已完成排班（已排2次以上值班）
     const weeklyDutyCount = getWeeklyDutyCount()
     const isScheduleComplete = weeklyDutyCount >= 2
@@ -325,7 +326,7 @@ const AssistantShiftViewPage = () => {
                   <div className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-50 border border-yellow-300 rounded-lg">
                     <AlertCircle className="w-4 h-4 text-yellow-600" />
                     <span className="text-xs font-medium text-yellow-700">
-                      本週尚未完成排班
+                      本週有未排班日期
                     </span>
                   </div>
                 )}
@@ -405,18 +406,22 @@ const AssistantShiftViewPage = () => {
 
                       return (
                         <td key={index} className="border border-gray-300 p-2">
-                          <div
-                            className={`flex flex-col items-center justify-center gap-2 rounded-lg border p-4 min-h-[80px] ${getPeriodStyle(
-                              period.type,
-                            )}`}
-                          >
-                            {getPeriodIcon(period.type)}
-                            <div className="text-center">
-                              <span className="text-sm font-medium block">
-                                {period.label}
-                              </span>
+                          {period.type === 'duty' ? (
+                            <div
+                              className={`flex flex-col items-center justify-center gap-2 rounded-lg border p-4 min-h-[80px] ${getPeriodStyle(
+                                period.type,
+                              )}`}
+                            >
+                              {getPeriodIcon(period.type)}
+                              <div className="text-center">
+                                <span className="text-sm font-medium block">
+                                  {period.label}
+                                </span>
+                              </div>
                             </div>
-                          </div>
+                          ) : (
+                            <div className="min-h-[80px]"></div>
+                          )}
                         </td>
                       )
                     })}
@@ -473,16 +478,20 @@ const AssistantShiftViewPage = () => {
                       const period = schedule.dutyEvening
                       return (
                         <td key={index} className="border border-gray-300 p-2">
-                          <div
-                            className={`flex flex-col items-center justify-center gap-2 rounded-lg border p-4 min-h-[80px] ${getPeriodStyle(
-                              period.type,
-                            )}`}
-                          >
-                            {getPeriodIcon(period.type)}
-                            <span className="text-sm font-medium">
-                              {period.label}
-                            </span>
-                          </div>
+                          {period.type === 'duty' ? (
+                            <div
+                              className={`flex flex-col items-center justify-center gap-2 rounded-lg border p-4 min-h-[80px] ${getPeriodStyle(
+                                period.type,
+                              )}`}
+                            >
+                              {getPeriodIcon(period.type)}
+                              <span className="text-sm font-medium">
+                                {period.label}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="min-h-[80px]"></div>
+                          )}
                         </td>
                       )
                     })}
@@ -513,59 +522,69 @@ const AssistantShiftViewPage = () => {
                 </div>
               </div>
             </div>
-
-            {/* 本週統計 */}
-            <div className="mt-4 p-4 bg-gradient-to-r from-blue-50 to-orange-50 rounded-lg border border-blue-100">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                本週統計
-              </h3>
-              <div className="grid grid-cols-4 gap-4">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-orange-600">
-                    {
-                      weekDates.filter((date) => isUserOnDuty(formatDate(date)))
-                        .length
-                    }
-                  </div>
-                  <div className="text-xs text-gray-600 mt-1">值班次數</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-blue-600">
-                    {
-                      weekDates.filter((date) => {
-                        const schedule = getDaySchedule(date)
-                        return schedule.work.type === 'work'
-                      }).length
-                    }
-                  </div>
-                  <div className="text-xs text-gray-600 mt-1">正常上班天數</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-gray-600">
-                    {
-                      weekDates.filter((date) => {
-                        const schedule = getDaySchedule(date)
-                        // 只要正常上班時段是休假就算
-                        return schedule.work.type === 'off'
-                      }).length
-                    }
-                  </div>
-                  <div className="text-xs text-gray-600 mt-1">休假天數</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-yellow-600">
-                    {
-                      weekDates.filter((date) => {
-                        const schedule = getDaySchedule(date)
-                        return schedule.work.type === 'unscheduled'
-                      }).length
-                    }
-                  </div>
-                  <div className="text-xs text-gray-600 mt-1">未排班天數</div>
-                </div>
+          </div>
+                      {/* 本週值班表 */}
+            <div className="mt-4 p-4 bg-white border border-gray-200 rounded-lg">
+              <div className="flex items-center gap-2 mb-3">
+                <Users className="w-5 h-5 text-gray-600" />
+                <h3 className="text-lg font-semibold text-gray-700">
+                  本週值班表
+                </h3>
+              </div>
+              <div className="grid grid-cols-7 gap-2">
+                {weekDates.map((date, index) => {
+                  const dateStr = formatDate(date)
+                  const isToday = dateStr === formatDate(new Date())
+                  const dayShift = calendarData?.shifts?.[dateStr]
+                  const doctors = dayShift?.doctors || []
+                  
+                  return (
+                    <div
+                      key={index}
+                      className={`p-3 rounded-lg border ${
+                        isToday
+                          ? 'bg-blue-50 border-blue-200'
+                          : 'bg-gray-50 border-gray-200'
+                      }`}
+                    >
+                      <div className="text-center mb-2">
+                        <div className={`text-xs font-semibold ${
+                          isToday ? 'text-blue-700' : 'text-gray-600'
+                        }`}>
+                          {weekDays[index]}
+                        </div>
+                        <div className={`text-xs ${
+                          isToday ? 'text-blue-600' : 'text-gray-500'
+                        }`}>
+                          {date.getMonth() + 1}/{date.getDate()}
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-1">
+                        {doctors.length > 0 ? (
+                          doctors.map((doctor, idx) => (
+                            <div
+                              key={idx}
+                              className={`text-xs font-medium text-center px-2 py-1.5 rounded ${
+                                doctor.employee_id === user?.employee_id
+                                  ? 'bg-orange-100 text-orange-700 border border-orange-300'
+                                  : 'bg-white text-gray-700 border border-gray-200'
+                              }`}
+                            >
+                              {doctor.name}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-xs text-gray-400 text-center py-1.5">
+                            無值班
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
-          </div>
         </main>
       </div>
     </Layout>
