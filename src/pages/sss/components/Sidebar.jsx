@@ -53,7 +53,9 @@ const Sidebar = () => {
         icon: Plus,
         path: '/sss/patient/management'
       }
-    ] : [
+    ] : []),
+    // 新增排程 - 只有醫師可以看到
+    ...(user?.role === 'D' ? [
       {
         id: 'add-schedule',
         title: '新增排程',
@@ -61,7 +63,7 @@ const Sidebar = () => {
         path: '/sss/add/schedule',
         requirePermission: '1' 
       }
-    ]),
+    ] : []),
     // 排班規劃 - 根據角色顯示不同內容
     ...(user?.role === 'N' ? [
       {

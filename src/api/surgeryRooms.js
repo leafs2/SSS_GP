@@ -27,7 +27,7 @@ const requireAuth = (req, res, next) => {
 router.get("/types", async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT type, type_code, time_info 
+      `SELECT type, type_code, type_info 
        FROM surgery_room_type 
        ORDER BY type_code`
     );
@@ -69,7 +69,7 @@ router.get("/types-with-count", requireAuth, async (req, res) => {
       query = `
         SELECT 
           srt.type,
-          srt.time_info,
+          srt.type_info,
           COALESCE(room_data.room_count, 0) as room_count,
           COALESCE(room_data.room_ids, ARRAY[]::character varying[]) as room_ids
         FROM surgery_room_type srt
@@ -90,12 +90,12 @@ router.get("/types-with-count", requireAuth, async (req, res) => {
       query = `
         SELECT 
           srt.type,
-          srt.time_info,
+          srt.type_info,
           COUNT(sr.id) as room_count,
           array_agg(sr.id ORDER BY sr.id) FILTER (WHERE sr.id IS NOT NULL) as room_ids
         FROM surgery_room_type srt
         LEFT JOIN surgery_room sr ON srt.type = sr.room_type
-        GROUP BY srt.type, srt.time_info
+        GROUP BY srt.type, srt.type_info
         HAVING COUNT(sr.id) > 0
         ORDER BY COUNT(sr.id) DESC, srt.type
       `;
@@ -107,8 +107,8 @@ router.get("/types-with-count", requireAuth, async (req, res) => {
       success: true,
       data: result.rows.map((row) => ({
         type: row.type,
-        displayName: row.time_info, // 中文名稱
-        timeInfo: row.time_info,
+        displayName: row.type_info, // 中文名稱
+        typeInfo: row.type_info,
         roomCount: parseInt(row.room_count) || 0,
         roomIds: row.room_ids || [],
       })),
@@ -133,7 +133,7 @@ router.get("/available", requireAuth, async (req, res) => {
         sr.morning_shift,
         sr.night_shift,
         sr.graveyard_shift,
-        srt.time_info
+        srt.type_info
       FROM surgery_room sr
       LEFT JOIN surgery_room_type srt ON sr.room_type = srt.type
       ORDER BY sr.room_type, sr.id
@@ -150,7 +150,7 @@ router.get("/available", requireAuth, async (req, res) => {
         morningShift: row.morning_shift,
         nightShift: row.night_shift,
         graveyardShift: row.graveyard_shift,
-        timeInfo: row.time_info,
+        typeInfo: row.type_info,
       })),
     });
   } catch (error) {
@@ -186,7 +186,7 @@ router.get("/type/:roomType", requireAuth, async (req, res) => {
         sr.morning_shift,
         sr.night_shift,
         sr.graveyard_shift,
-        srt.time_info
+        srt.type_info
       FROM surgery_room sr
       LEFT JOIN surgery_room_type srt ON sr.room_type = srt.type
       WHERE sr.room_type = $1 ${shiftCondition}
@@ -204,7 +204,7 @@ router.get("/type/:roomType", requireAuth, async (req, res) => {
         morningShift: row.morning_shift,
         nightShift: row.night_shift,
         graveyardShift: row.graveyard_shift,
-        timeInfo: row.time_info,
+        typeInfo: row.type_info,
       })),
     });
   } catch (error) {
@@ -229,7 +229,7 @@ router.get("/:roomId", requireAuth, async (req, res) => {
         sr.morning_shift,
         sr.night_shift,
         sr.graveyard_shift,
-        srt.time_info
+        srt.type_info
       FROM surgery_room sr
       LEFT JOIN surgery_room_type srt ON sr.room_type = srt.type
       WHERE sr.id = $1
@@ -255,7 +255,7 @@ router.get("/:roomId", requireAuth, async (req, res) => {
         morningShift: room.morning_shift,
         nightShift: room.night_shift,
         graveyardShift: room.graveyard_shift,
-        timeInfo: room.time_info,
+        typeInfo: room.type_info,
       },
     });
   } catch (error) {

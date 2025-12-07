@@ -1,5 +1,5 @@
 // pages/sss/AddSchedulePage.jsx
-// 新增手術排程頁面 - 整合醫師排班顯示
+// 新增手術排程頁面 - 整合真實演算法 API
 
 import React, { useState, useEffect } from 'react';
 import { 
@@ -31,10 +31,18 @@ import Layout from './components/Layout';
 import PageHeader from './components/PageHeader';
 import { useMySchedule } from '../../hooks/useSchedule';
 import { useMySurgeryTypes } from '../../hooks/useSurgeryType';
+import { useAuth } from '../login/AuthContext';
+
+// ✨ 使用 Service 統一管理 API 呼叫
 import surgeryTypeService from '../../services/surgeryTypeService';
 import surgeryService from '../../services/surgeryService';
+import IBRSAService from '../../services/IBRSAService';
+import employeeService from '../../services/employeeService';
+import surgeryRoomService from '../../services/surgeryRoomService';
+import patientService from '../../services/patientService';
 
 const AddSchedulePage = () => {
+  const { user } = useAuth(); // 取得當前登入醫師資訊
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
   const [recommendedDates, setRecommendedDates] = useState([]);
@@ -42,6 +50,10 @@ const AddSchedulePage = () => {
   const [showRecommendation, setShowRecommendation] = useState(false);
   const [roomTypes, setRoomTypes] = useState([]);
   const [loadingRoomTypes, setLoadingRoomTypes] = useState(false);
+  
+  // 推薦狀態
+  const [recommendLoading, setRecommendLoading] = useState(false);
+  const [recommendError, setRecommendError] = useState(null);
   
   // 病患預覽對話框
   const [patientPreviewDialog, setPatientPreviewDialog] = useState({
@@ -63,6 +75,7 @@ const AddSchedulePage = () => {
     patientFound: false,
     assistantDoctor: '',
     surgeryType: '',
+    surgeryCode: '',
     estimatedHours: '',
     roomType: '',
     nurseCount: ''
@@ -80,23 +93,17 @@ const AddSchedulePage = () => {
   const [assistantDoctors, setAssistantDoctors] = useState([]);
   const [loadingAssistants, setLoadingAssistants] = useState(false);
 
-  // 載入助手醫師列表
+  // ✅ 修改：載入助手醫師列表 - 使用 employeeService
   useEffect(() => {
     const loadAssistantDoctors = async () => {
       if (!department) return;
 
       setLoadingAssistants(true);
       try {
-        const response = await fetch(
-          `http://localhost:3001/api/employees/by-department-role?department_code=${department.code}&role=A`
-        );
-        const data = await response.json();
-
-        if (data.success) {
-          setAssistantDoctors(data.data);
-          console.log('Department:', department);
-          console.log('✅ 載入助手醫師列表:', data.data);
-        }
+        const doctors = await employeeService.getAssistantDoctors(department.code);
+        setAssistantDoctors(doctors);
+        console.log('Department:', department);
+        console.log('✅ 載入助手醫師列表:', doctors);
       } catch (error) {
         console.error('❌ 載入助手醫師列表失敗:', error);
       } finally {
@@ -107,18 +114,14 @@ const AddSchedulePage = () => {
     loadAssistantDoctors();
   }, [department]);
 
-  // 載入手術室類型列表
+  // ✅ 修改：載入手術室類型列表 - 使用 surgeryRoomService
   useEffect(() => {
     const loadRoomTypes = async () => {
       setLoadingRoomTypes(true);
       try {
-        const response = await fetch('http://localhost:3001/api/surgery-rooms/types');
-        const data = await response.json();
-
-        if (data.success) {
-          setRoomTypes(data.data);
-          console.log('✅ 載入手術室類型:', data.data);
-        }
+        const types = await surgeryRoomService.getRoomTypes();
+        setRoomTypes(types);
+        console.log('✅ 載入手術室類型:', types);
       } catch (error) {
         console.error('❌ 載入手術室類型失敗:', error);
       } finally {
@@ -128,6 +131,7 @@ const AddSchedulePage = () => {
 
     loadRoomTypes();
   }, []);
+
   /**
    * 當選擇手術類型時，取得詳細資訊並自動填入預設值
    */
@@ -205,7 +209,7 @@ const AddSchedulePage = () => {
         };
       }
       
-      // 全天門診 - 淺灰色（避免與手術日混淆）
+      // 全天門診 - 淺灰色
       if (type === 'clinic') {
         return {
           type: 'clinic-fullday',
@@ -227,7 +231,6 @@ const AddSchedulePage = () => {
       return null;
     }
     
-    // 如果上午或下午有看診，但不是全天，也不標註顏色（避免混淆）
     return null;
   };
 
@@ -264,7 +267,7 @@ const AddSchedulePage = () => {
   };
 
   /**
-   * 搜尋病患資料
+   * ✅ 修改：搜尋病患資料 - 使用 patientService
    */
   const handlePatientSearch = async () => {
     if (!formData.patientId) {
@@ -275,18 +278,11 @@ const AddSchedulePage = () => {
     setPatientPreviewDialog({ open: true, patient: null, loading: true });
 
     try {
-      const response = await fetch(`http://localhost:3001/api/patients/${formData.patientId}`);
-      const data = await response.json();
-
-      if (data.success) {
-        setPatientPreviewDialog({ open: true, patient: data.data, loading: false });
-      } else {
-        alert('找不到該病患資料');
-        setPatientPreviewDialog({ open: false, patient: null, loading: false });
-      }
+      const patient = await patientService.getPatientById(formData.patientId);
+      setPatientPreviewDialog({ open: true, patient, loading: false });
     } catch (error) {
       console.error('搜尋病患失敗:', error);
-      alert('搜尋失敗：無法連接到伺服器');
+      alert(error.message || error.error || '找不到該病患資料');
       setPatientPreviewDialog({ open: false, patient: null, loading: false });
     }
   };
@@ -334,58 +330,68 @@ const AddSchedulePage = () => {
     return age;
   };
 
-  const handleRecommendDate = () => {
+  /**
+   * 🎯 ✅ 修改：推薦手術日期 - 使用 IBRSAService
+   */
+  const handleRecommendDate = async () => {
     if (!validateForm()) {
       alert('請填寫所有必填欄位');
       return;
     }
 
+    if (!user?.employee_id) {
+      alert('無法取得醫師資訊');
+      return;
+    }
+
     setShowRecommendation(true);
-    
-    // 模擬演算法推薦日期 - 優先推薦手術日
-    setTimeout(() => {
-      const today = new Date();
-      const year = today.getFullYear();
-      const month = today.getMonth();
-      
-      // 找出未來的手術日
-      const surgeryDates = [];
-      
-      // 檢查未來 30 天
-      for (let i = 1; i <= 30; i++) {
-        const checkDate = new Date(year, month, today.getDate() + i);
-        const status = getDayScheduleStatus(checkDate);
-        
-        if (status?.type === 'surgery') {
-          surgeryDates.push(checkDate);
-        }
-        
-        // 找到 3 個就停止
-        if (surgeryDates.length >= 3) break;
+    setRecommendLoading(true);
+    setRecommendError(null);
+    setRecommendedDates([]);
+
+    try {
+      const requestData = {
+        doctorId: user.employee_id,
+        surgeryTypeCode: formData.surgeryCode,
+        surgeryDuration: parseFloat(formData.estimatedHours),
+        surgeryRoomType: formData.roomType,
+        assistantId: formData.assistantDoctor || null,
+        returnLimit: 5
+      };
+
+      console.log('📤 送出推薦請求:', requestData);
+
+      // 🎯 使用 IBRSAService
+      const data = await IBRSAService.recommendSurgeryDates(requestData);
+
+      console.log('📥 收到推薦結果:', data);
+
+      if (data.success && data.recommendations && data.recommendations.length > 0) {
+        const dates = data.recommendations.map(rec => ({
+          date: new Date(rec.date + 'T00:00:00'),
+          score: rec.totalScore,
+          rank: rec.rank,
+          label: rec.rank === 1 ? '最佳' : rec.rank === 2 ? '推薦' : '可行',
+          details: rec
+        }));
+
+        setRecommendedDates(dates);
+        setRecommendError(null);
+        console.log('✅ 推薦成功:', dates.length, '個日期');
+      } else {
+        setRecommendedDates([]);
+        setRecommendError(data.message || '找不到適合的日期');
+        alert(data.message || '未來一個月內找不到適合的日期，請調整條件或聯絡排程人員');
       }
-      
-      // 如果手術日不足 3 個，補充其他可用日期
-      if (surgeryDates.length < 3) {
-        for (let i = 1; i <= 30 && surgeryDates.length < 3; i++) {
-          const checkDate = new Date(year, month, today.getDate() + i);
-          const status = getDayScheduleStatus(checkDate);
-          
-          // 不是休假日且不是已選的手術日
-          if (!status || status.type === 'clinic-fullday') {
-            const alreadyExists = surgeryDates.some(d => 
-              d.getDate() === checkDate.getDate() &&
-              d.getMonth() === checkDate.getMonth()
-            );
-            
-            if (!alreadyExists) {
-              surgeryDates.push(checkDate);
-            }
-          }
-        }
-      }
-      
-      setRecommendedDates(surgeryDates);
-    }, 1500);
+
+    } catch (error) {
+      console.error('❌ 推薦日期失敗:', error);
+      setRecommendError(error.message || error.error || '推薦失敗');
+      setRecommendedDates([]);
+      alert(`推薦失敗：${error.message || error.error || '無法連接到伺服器'}`);
+    } finally {
+      setRecommendLoading(false);
+    }
   };
 
   const validateForm = () => {
@@ -399,23 +405,64 @@ const AddSchedulePage = () => {
 
   const isRecommendedDate = (date) => {
     return recommendedDates.some(rd => 
-      rd.getDate() === date.getDate() &&
-      rd.getMonth() === date.getMonth() &&
-      rd.getFullYear() === date.getFullYear()
+      rd.date.getDate() === date.getDate() &&
+      rd.date.getMonth() === date.getMonth() &&
+      rd.date.getFullYear() === date.getFullYear()
     );
   };
 
   const getRecommendationScore = (date) => {
-    const index = recommendedDates.findIndex(rd =>
-      rd.getDate() === date.getDate() &&
-      rd.getMonth() === date.getMonth() &&
-      rd.getFullYear() === date.getFullYear()
+    const recommended = recommendedDates.find(rd =>
+      rd.date.getDate() === date.getDate() &&
+      rd.date.getMonth() === date.getMonth() &&
+      rd.date.getFullYear() === date.getFullYear()
     );
     
-    if (index === 0) return { score: 95, label: '最佳' };
-    if (index === 1) return { score: 88, label: '推薦' };
-    if (index === 2) return { score: 82, label: '可行' };
-    return null;
+    return recommended ? {
+      score: recommended.score,
+      label: recommended.label,
+      rank: recommended.rank,
+      details: recommended.details
+    } : null;
+  };
+
+  /**
+   * 🚫 檢查日期是否可以選擇
+   * - 過去的日期不可選（含今天）
+   * - 今天和未來 3 天不可選（準備期）
+   * - 從第 4 天開始可選
+   */
+  const isDateSelectable = (date) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const targetDate = new Date(date);
+    targetDate.setHours(0, 0, 0, 0);
+    
+    // 計算準備期結束日期（今天 + 3 天）
+    const preparationEndDate = new Date(today);
+    preparationEndDate.setDate(today.getDate() + 3);
+    
+    // 日期必須在準備期之後
+    return targetDate > preparationEndDate;
+  };
+
+  /**
+   * 🆕 檢查日期是否在準備期內
+   * - 今天（含）到未來 3 天
+   */
+  const isInPreparationPeriod = (date) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const targetDate = new Date(date);
+    targetDate.setHours(0, 0, 0, 0);
+    
+    const preparationEndDate = new Date(today);
+    preparationEndDate.setDate(today.getDate() + 3);
+    
+    // 在今天（含）到準備期結束日期之間
+    return targetDate >= today && targetDate <= preparationEndDate;
   };
 
   const handleDateSelect = (date) => {
@@ -469,6 +516,7 @@ const AddSchedulePage = () => {
       setSelectedDate(null);
       setRecommendedDates([]);
       setShowRecommendation(false);
+      setRecommendError(null);
 
     } catch (error) {
       console.error('❌ 新增手術排程失敗:', error);
@@ -544,6 +592,28 @@ const AddSchedulePage = () => {
             </div>
           )}
 
+          {/* 推薦載入狀態 */}
+          {recommendLoading && (
+            <div className="mb-3 p-3 bg-purple-50 rounded-lg border border-purple-200 flex items-center gap-2">
+              <Loader2 className="w-5 h-5 animate-spin text-purple-600" />
+              <div>
+                <p className="text-sm font-medium text-purple-700">正在分析合適的手術日期...</p>
+                <p className="text-xs text-purple-600 mt-0.5">考慮醫師排班、助手值班、手術房使用率等因素</p>
+              </div>
+            </div>
+          )}
+
+          {/* 推薦錯誤訊息 */}
+          {recommendError && !recommendLoading && (
+            <div className="mb-3 p-3 bg-amber-50 rounded-lg border border-amber-200 flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-amber-800">無法推薦日期</p>
+                <p className="text-xs text-amber-700 mt-1">{recommendError}</p>
+              </div>
+            </div>
+          )}
+
           {/* 日曆網格 */}
           <div className="flex-1 flex flex-col">
             {/* 星期標題 */}
@@ -565,8 +635,17 @@ const AddSchedulePage = () => {
                   return <div key={`empty-${index}`} className="min-h-[70px] rounded-lg border-2 border-transparent" />;
                 }
 
-                const isToday = date.toDateString() === new Date().toDateString();
-                const isPast = date < new Date(new Date().setHours(0, 0, 0, 0));
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                
+                const targetDate = new Date(date);
+                targetDate.setHours(0, 0, 0, 0);
+                
+                const isToday = targetDate.getTime() === today.getTime();
+                const isPast = targetDate < today; // 過去的日期（不含今天）
+                const isPreparation = isInPreparationPeriod(date); // 準備期（含今天）
+                const isSelectable = isDateSelectable(date); // 可選擇
+                
                 const isSelected = selectedDate && 
                   date.getDate() === selectedDate.getDate() &&
                   date.getMonth() === selectedDate.getMonth() &&
@@ -578,37 +657,36 @@ const AddSchedulePage = () => {
                 // 取得排班狀態
                 const scheduleStatus = getDayScheduleStatus(date);
 
-                // 過去的日期不載入排班，直接顯示為灰色
-                const displayScheduleStatus = isPast ? null : scheduleStatus;
+                // 不可選的日期不載入排班
+                const displayScheduleStatus = isSelectable ? scheduleStatus : null;
 
                 return (
                   <button
                     key={index}
-                    onClick={() => !isPast && handleDateSelect(date)}
-                    disabled={isPast}
+                    onClick={() => isSelectable && handleDateSelect(date)}
+                    disabled={!isSelectable}
                     className={`
                       rounded-lg border-2 transition-all duration-200 relative min-h-[70px] flex items-center justify-center
-                      ${isPast ? 'bg-gray-50 text-gray-300 cursor-not-allowed border-gray-200' : 'hover:bg-gray-50 cursor-pointer'}
-                      ${isToday && !isPast ? 'ring-2 ring-blue-500' : ''}
-                      ${isSelected ? 'bg-blue-600 text-white hover:bg-blue-700 border-blue-600' : !isPast ? 'text-gray-700' : ''}
-                      ${isRecommended && !isSelected && !isPast ? 'bg-green-50 ring-2 ring-green-400 border-green-400' : ''}
-                      ${displayScheduleStatus && !isSelected && !isRecommended && !isPast ? displayScheduleStatus.bgColor + ' ' + displayScheduleStatus.borderColor : !displayScheduleStatus && !isPast && !isRecommended && !isSelected ? 'border-gray-200' : ''}
+                      ${!isSelectable ? 'bg-gray-50 text-gray-300 cursor-not-allowed border-gray-200' : 'hover:bg-gray-50 cursor-pointer'}
+                      ${isToday && isSelectable ? 'ring-2 ring-blue-500' : ''}
+                      ${isSelected ? 'bg-blue-600 text-white hover:bg-blue-700 border-blue-600' : isSelectable ? 'text-gray-700' : ''}
+                      ${isRecommended && !isSelected && isSelectable ? 'bg-green-50 ring-2 ring-green-400 border-green-400' : ''}
+                      ${displayScheduleStatus && !isSelected && !isRecommended && isSelectable ? displayScheduleStatus.bgColor + ' ' + displayScheduleStatus.borderColor : !displayScheduleStatus && isSelectable && !isRecommended && !isSelected ? 'border-gray-200' : ''}
                     `}
                   >
                     <div className="flex flex-col items-center justify-center h-full">
                       {/* 日期數字 */}
                       <span className={`text-xs font-medium ${
                         isSelected ? 'text-white' : 
-                        isPast ? 'text-gray-300' :
+                        !isSelectable ? 'text-gray-300' :
                         displayScheduleStatus?.textColor || 'text-gray-700'
                       }`}>
                         {date.getDate()}
                       </span>
                       
-                      {/* 排班狀態指示器 - 只顯示「看診」文字，手術和休假只保留背景色 */}
-                      {displayScheduleStatus && !isSelected && !isRecommended && !isPast && (
+                      {/* 排班狀態指示器 */}
+                      {displayScheduleStatus && !isSelected && !isRecommended && isSelectable && (
                         <div className="flex items-center gap-0.5 mt-0.5">
-                          {/* 只有看診類型才顯示文字標籤 */}
                           {displayScheduleStatus.type === 'clinic-fullday' && (
                             <>
                               <div className={`w-1.5 h-1.5 rounded-full ${displayScheduleStatus.dotColor}`}></div>
@@ -621,10 +699,24 @@ const AddSchedulePage = () => {
                       )}
                       
                       {/* 推薦標記 */}
-                      {isRecommended && !isSelected && recommendation && !isPast && (
-                        <span className="text-[8px] font-bold text-green-700 mt-0.5">
-                          {recommendation.label}
-                        </span>
+                      {isRecommended && !isSelected && recommendation && isSelectable && (
+                        <div className="flex flex-col items-center mt-0.5">
+                          <span className="text-[8px] font-bold text-green-700">
+                            {recommendation.label}
+                          </span>
+                          <span className="text-[7px] text-green-600">
+                            {Math.round(recommendation.score)}分
+                          </span>
+                        </div>
+                      )}
+                      
+                      {/* 準備期標記 - 顯示在今天和未來3天 */}
+                      {isPreparation && (
+                        <div className="mt-0.5">
+                          <span className="text-[8px] text-gray-400 font-medium">
+                            準備期
+                          </span>
+                        </div>
                       )}
                     </div>
 
@@ -653,14 +745,22 @@ const AddSchedulePage = () => {
                     {/* 顯示該日期的排班狀態 */}
                     {(() => {
                       const status = getDayScheduleStatus(selectedDate);
-                      if (status) {
-                        return (
-                          <p className="text-[10px] text-blue-600 mt-0.5">
-                            排班狀態：{status.label}
-                          </p>
-                        );
-                      }
-                      return null;
+                      const recommendation = getRecommendationScore(selectedDate);
+                      
+                      return (
+                        <>
+                          {status && (
+                            <p className="text-[10px] text-blue-600 mt-0.5">
+                              排班狀態：{status.label}
+                            </p>
+                          )}
+                          {recommendation && (
+                            <p className="text-[10px] text-green-600 mt-0.5">
+                              推薦等級：{recommendation.label}（{Math.round(recommendation.score)}分）
+                            </p>
+                          )}
+                        </>
+                      );
                     })()}
                   </div>
                 </div>
@@ -744,7 +844,7 @@ const AddSchedulePage = () => {
               )}
             </div>
 
-            {/* 手術類型 - 使用 custom hook */}
+            {/* 手術類型 */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1 text-left">
                 手術類型 <span className="text-red-500">*</span>
@@ -769,7 +869,7 @@ const AddSchedulePage = () => {
               </div>
             </div>
 
-            {/* 預估時間 和 護士人數 - 會自動填入 */}
+            {/* 預估時間 和 護士人數 */}
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1 text-left">
@@ -825,7 +925,7 @@ const AddSchedulePage = () => {
                 </option>
                 {roomTypes.map(type => (
                   <option key={type.type} value={type.type}>
-                    {type.time_info}手術室
+                    {type.type_info}手術室
                   </option>
                 ))}
               </select>
@@ -842,11 +942,20 @@ const AddSchedulePage = () => {
           <div className="space-y-2 mt-auto pt-3 border-t border-gray-200">
             <button
               onClick={handleRecommendDate}
-              disabled={!validateForm() || scheduleLoading}
+              disabled={!validateForm() || scheduleLoading || recommendLoading}
               className="w-full py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-sm rounded-lg hover:from-purple-700 hover:to-blue-700 disabled:from-gray-300 disabled:to-gray-300 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center gap-2 font-medium"
             >
-              <Sparkles className="w-4 h-4" />
-              分析合適手術日期
+              {recommendLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  分析中...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  分析合適手術日期
+                </>
+              )}
             </button>
 
             <button
