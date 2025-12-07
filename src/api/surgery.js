@@ -167,6 +167,115 @@ router.post("/", requireAuth, async (req, res) => {
 });
 
 /**
+ * GET /api/surgery/pending/list
+ * 獲取待排程手術清單
+ * 可選參數: startDate, endDate (用於篩選特定週的手術)
+ */
+router.get("/pending/list", requireAuth, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    let query = `
+      SELECT 
+        s.id,
+        s.surgery_id,
+        s.doctor_id,
+        s.assistant_doctor_id,
+        s.surgery_type_code,
+        s.patient_id,
+        s.surgery_room_type,
+        s.surgery_date,
+        s.duration,
+        s.nurse_count,
+        s.created_at,
+        p.name as patient_name,
+        p.id_number as patient_id_number,
+        d.name as doctor_name,
+        ad.name as assistant_doctor_name,
+        st.surgery_name,
+        st.main_subjects,
+        dept.name as department_name,
+        srt.type_info as room_type_info
+      FROM surgery s
+      LEFT JOIN patient p ON s.patient_id = p.patient_id
+      LEFT JOIN employees d ON s.doctor_id = d.employee_id
+      LEFT JOIN employees ad ON s.assistant_doctor_id = ad.employee_id
+      LEFT JOIN surgery_type_code st ON s.surgery_type_code = st.surgery_code
+      LEFT JOIN departments dept ON st.main_subjects = dept.code
+      LEFT JOIN surgery_room_type srt ON s.surgery_room_type = srt.type
+      WHERE NOT EXISTS (
+        SELECT 1 FROM surgery_correct_time sct 
+        WHERE sct.surgery_id = s.surgery_id
+      )
+    `;
+
+    const params = [];
+
+    // 如果有指定日期範圍,加入篩選條件
+    if (startDate && endDate) {
+      query += ` AND s.surgery_date >= $1 AND s.surgery_date <= $2`;
+      params.push(startDate, endDate);
+    } else if (startDate) {
+      query += ` AND s.surgery_date >= $1`;
+      params.push(startDate);
+    } else if (endDate) {
+      query += ` AND s.surgery_date <= $1`;
+      params.push(endDate);
+    }
+
+    query += ` ORDER BY s.surgery_date ASC, s.created_at ASC`;
+
+    const result = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      total: result.rows.length,
+    });
+  } catch (error) {
+    console.error("獲取待排程手術清單失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: "獲取待排程手術清單失敗",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/surgery/pending/count
+ * 獲取待排程手術數量（按週分組）
+ */
+router.get("/pending/count", requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        DATE_TRUNC('week', s.surgery_date) as week_start,
+        COUNT(*) as count
+      FROM surgery s
+      WHERE NOT EXISTS (
+        SELECT 1 FROM surgery_correct_time sct 
+        WHERE sct.surgery_id = s.surgery_id
+      )
+      GROUP BY DATE_TRUNC('week', s.surgery_date)
+      ORDER BY week_start
+    `);
+
+    res.json({
+      success: true,
+      data: result.rows,
+    });
+  } catch (error) {
+    console.error("獲取待排程數量失敗:", error);
+    res.status(500).json({
+      success: false,
+      error: "獲取待排程數量失敗",
+      message: error.message,
+    });
+  }
+});
+
+/**
  * GET /api/surgery/:surgeryId
  * 查詢特定手術排程
  */

@@ -10,6 +10,7 @@ import Homepage from './pages/sss/Homepage';
 import AddSchedulePage from './pages/sss/AddSchedulePage'; 
 import ShiftPlanningPage from './pages/sss/ShiftPlanningPage'; 
 import OperatingRoomStatus from './pages/sss/OperatingRoomStatus'; 
+import SurgerySchedule from './pages/sss/SurgerySchedule'; // 新增
 import NavigationPage from './pages/NavigationPage';
 import QuickLogin from './pages/login/QuickLogin';
 import PatientManagementPage from './pages/sss/PatientManagementPage';
@@ -102,7 +103,7 @@ function App() {
             } 
           />
           
-          {/* 僅需要登入的路由 */}
+          {/* 手術室相關路由 */}
           <Route 
             path="/sss/operation/rooms" 
             element={
@@ -112,6 +113,17 @@ function App() {
             } 
           />
 
+          {/* 預期手術行程 - 新增 */}
+          <Route 
+            path="/sss/surgery/schedule" 
+            element={
+              <ProtectedRoute>
+                <SurgerySchedule />
+              </ProtectedRoute>
+            } 
+          />
+
+          {/* 病患管理相關路由 */}
           <Route 
             path="/sss/patient/management" 
             element={
