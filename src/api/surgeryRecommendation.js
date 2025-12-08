@@ -382,7 +382,7 @@ async function checkOperatingRoomAvailability(
   try {
     // 1. 查詢手術房類型的容量資訊
     const roomTypeResult = await pool.query(
-      `SELECT type, type_info, type_code, moring as morning_capacity, 
+      `SELECT type, type_info, type_code, morning as morning_capacity, 
               night as night_capacity, graveyard as graveyard_capacity
        FROM surgery_room_type 
        WHERE type = $1`,

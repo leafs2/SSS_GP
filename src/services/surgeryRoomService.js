@@ -41,12 +41,17 @@ const surgeryRoomService = {
   },
 
   /**
-   * 取得所有手術室
-   * @returns {Promise<Array>} 手術室列表
+   * 取得手術室類型及數量統計
+   * @param {string} shift - 時段篩選 (morning, evening, night)，可選
+   * @returns {Promise<Array>} 手術室類型列表(含數量統計)
    */
-  getAllRooms: async () => {
+  getTypesWithCount: async (shift = null) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/surgery-rooms`, {
+      const url = shift
+        ? `${API_BASE_URL}/api/surgery-rooms/types-with-count?shift=${shift}`
+        : `${API_BASE_URL}/api/surgery-rooms/types-with-count`;
+
+      const response = await fetch(url, {
         method: "GET",
         credentials: "include",
       });
@@ -54,7 +59,29 @@ const surgeryRoomService = {
       const data = await handleResponse(response);
       return data.data || [];
     } catch (error) {
-      console.error("❌ 取得手術室列表失敗:", error);
+      console.error("❌ 取得手術室類型統計失敗:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * 取得所有可用手術室
+   * @returns {Promise<Array>} 手術室列表
+   */
+  getAvailableRooms: async () => {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/surgery-rooms/available`,
+        {
+          method: "GET",
+          credentials: "include",
+        }
+      );
+
+      const data = await handleResponse(response);
+      return data.data || [];
+    } catch (error) {
+      console.error("❌ 取得可用手術室列表失敗:", error);
       throw error;
     }
   },
@@ -62,21 +89,23 @@ const surgeryRoomService = {
   /**
    * 根據類型取得手術室
    * @param {string} roomType - 手術室類型
+   * @param {string} shift - 時段篩選 (morning, evening, night)，可選
    * @returns {Promise<Array>} 該類型的手術室列表
    */
-  getRoomsByType: async (roomType) => {
+  getRoomsByType: async (roomType, shift = null) => {
     try {
       if (!roomType) {
         throw new Error("缺少手術室類型");
       }
 
-      const response = await fetch(
-        `${API_BASE_URL}/api/surgery-rooms/type/${roomType}`,
-        {
-          method: "GET",
-          credentials: "include",
-        }
-      );
+      const url = shift
+        ? `${API_BASE_URL}/api/surgery-rooms/type/${roomType}?shift=${shift}`
+        : `${API_BASE_URL}/api/surgery-rooms/type/${roomType}`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+      });
 
       const data = await handleResponse(response);
       return data.data || [];
@@ -109,33 +138,6 @@ const surgeryRoomService = {
       return data.data;
     } catch (error) {
       console.error(`❌ 取得手術室 ${roomId} 資訊失敗:`, error);
-      throw error;
-    }
-  },
-
-  /**
-   * 取得手術室當日使用狀況
-   * @param {string} date - 日期 (YYYY-MM-DD)
-   * @returns {Promise<Array>} 當日手術室使用狀況
-   */
-  getRoomStatusByDate: async (date) => {
-    try {
-      if (!date) {
-        throw new Error("缺少日期");
-      }
-
-      const response = await fetch(
-        `${API_BASE_URL}/api/surgery-rooms/status?date=${date}`,
-        {
-          method: "GET",
-          credentials: "include",
-        }
-      );
-
-      const data = await handleResponse(response);
-      return data.data || [];
-    } catch (error) {
-      console.error(`❌ 取得 ${date} 手術室狀況失敗:`, error);
       throw error;
     }
   },

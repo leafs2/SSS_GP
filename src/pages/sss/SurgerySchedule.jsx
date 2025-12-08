@@ -83,63 +83,54 @@ const SurgerySchedule = () => {
   };
 
   // 載入手術室類型和資料
-  useEffect(() => {
+    useEffect(() => {
     const loadSurgeryRoomData = async () => {
-      try {
+        try {
         setLoading(true);
         setError(null);
 
-        const response = await fetch(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/surgery-rooms/types-with-count`,
-          {
-            method: 'GET',
-            credentials: 'include',
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error('取得手術室資料失敗');
-        }
-
-        const data = await response.json();
+        // 使用 service 取代直接 fetch
+        const data = await surgeryRoomService.getTypesWithCount();
         
-        if (data.success && data.data) {
-          const formattedCategories = data.data.map(item => ({
-            id: item.type,
-            name: item.displayName || item.type,
-            total: item.roomCount,
-            rooms: item.roomIds || [],
-            subtitle: item.typeInfo || ''
-          }));
+        if (data && data.length > 0) {
+            // 後端已經格式化好資料,直接使用
+            const formattedCategories = data.map(item => ({
+            id: item.type,                    // 後端的 type
+            name: item.displayName,            // 後端的 displayName (中文名稱)
+            total: item.roomCount,             // 後端的 roomCount
+            rooms: item.roomIds || [],         // 後端的 roomIds
+            subtitle: item.typeInfo || ''      // 後端的 typeInfo
+            }));
 
-          setCategories(formattedCategories);
+            setCategories(formattedCategories);
 
-          if (formattedCategories.length > 0) {
+            if (formattedCategories.length > 0) {
             setSelectedCategory(formattedCategories[0].id);
-          }
+            }
 
-          const roomsDataTemp = {};
-          for (const category of formattedCategories) {
+            // 載入各類型的手術室詳細資料
+            const roomsDataTemp = {};
+            for (const category of formattedCategories) {
             const rooms = await surgeryRoomService.getRoomsByType(category.id);
             roomsDataTemp[category.id] = rooms;
-          }
-          
-          setRoomsData(roomsDataTemp);
+            }
+            
+            setRoomsData(roomsDataTemp);
 
-          // 生成模擬排程資料
-          const currentWeekDates = getWeekDates(currentWeek);
-          generateScheduleData(formattedCategories, roomsDataTemp, currentWeekDates);
+            // 生成模擬排程資料
+            const currentWeekDates = getWeekDates(currentWeek);
+            generateScheduleData(formattedCategories, roomsDataTemp, currentWeekDates);
         }
-      } catch (err) {
+        } catch (err) {
         console.error('載入手術室資料失敗:', err);
-        setError(err.message || '載入資料失敗,請稍後再試');
-      } finally {
+        setError(err.error || err.message || '載入資料失敗,請稍後再試');
+        } finally {
         setLoading(false);
-      }
+        }
     };
 
     loadSurgeryRoomData();
-  }, []);
+    }, []);
 
   // 生成模擬排程資料
   const generateScheduleData = (cats, rooms, dates) => {

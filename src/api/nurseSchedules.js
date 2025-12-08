@@ -33,7 +33,7 @@ router.get("/my-schedule", requireNurse, async (req, res) => {
         ns.surgery_room_type,
         ns.surgery_room_id,
         sr.room_type,
-        srt.time_info
+        srt.type_info
       FROM nurse_schedule ns
       LEFT JOIN surgery_room sr ON ns.surgery_room_id = sr.id
       LEFT JOIN surgery_room_type srt ON ns.surgery_room_type = srt.type
@@ -102,7 +102,7 @@ router.get("/my-schedule", requireNurse, async (req, res) => {
         dayOffWeek: dayOffWeek,
         surgeryRoom: schedule.surgery_room_id,
         surgeryRoomType: schedule.room_type || schedule.surgery_room_type,
-        timeInfo: schedule.time_info,
+        timeInfo: schedule.type_info,
       },
     });
   } catch (error) {
@@ -302,7 +302,7 @@ router.get("/surgery-room-types", requireNurse, async (req, res) => {
     const query = `
       SELECT 
         srt.type as room_type,
-        srt.time_info,
+        srt.type_info,
         COUNT(sr.id) as room_count,
         array_agg(
           json_build_object(
@@ -314,7 +314,7 @@ router.get("/surgery-room-types", requireNurse, async (req, res) => {
         ) as rooms
       FROM surgery_room_type srt
       LEFT JOIN surgery_room sr ON srt.type = sr.room_type AND sr.is_available = true
-      GROUP BY srt.type, srt.time_info
+      GROUP BY srt.type, srt.type_info
       ORDER BY srt.type
     `;
 
@@ -324,7 +324,7 @@ router.get("/surgery-room-types", requireNurse, async (req, res) => {
       success: true,
       data: result.rows.map((row) => ({
         roomType: row.room_type,
-        timeInfo: row.time_info,
+        timeInfo: row.type_info,
         roomCount: parseInt(row.room_count),
         rooms: row.rooms.filter((room) => room.id !== null), // 過濾掉沒有實際手術室的類型
       })),
@@ -426,7 +426,7 @@ router.get("/surgery-rooms", requireNurse, async (req, res) => {
         sr.room_type,
         sr.is_available,
         sr.nurse_count::integer as nurse_count,
-        srt.time_info
+        srt.type_info
       FROM surgery_room sr
       LEFT JOIN surgery_room_type srt ON sr.room_type = srt.type
       WHERE sr.is_available = true
@@ -442,7 +442,7 @@ router.get("/surgery-rooms", requireNurse, async (req, res) => {
         roomType: row.room_type,
         isAvailable: row.is_available,
         nurseCount: parseInt(row.nurse_count),
-        timeInfo: row.time_info,
+        timeInfo: row.type_info,
       })),
     });
   } catch (error) {

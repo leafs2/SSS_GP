@@ -212,10 +212,6 @@ const NurseShiftViewPage = () => {
           if (assignedRoom && roomMap.has(assignedRoom)) {
             const roomData = roomMap.get(assignedRoom);
             
-            // 🔥 修正：根據 floatNurse 本身的時段，而不是當前用戶的時段
-            // 從 floatSchedules 中，每位流動護士應該有自己的時段資訊
-            // 如果沒有，我們需要從 departmentSchedules 中查找
-            
             let nurseShift = null;
             
             // 方法1: 如果 floatNurse 有 shift 欄位
