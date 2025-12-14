@@ -10,12 +10,12 @@ Usage:
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .api import health, assignment
+from .api import health, assignment, scheduling  # 新增 scheduling
 
 # 創建 FastAPI 應用實例
 app = FastAPI(
     title="Algorithm Service",
-    description="手術室排程演算法服務 - 提供護士排班、手術室分配等演算法",
+    description="手術室排程演算法服務 - 提供護士排班、手術室分配、TS-HSO排程等演算法",
     version="1.0.0"
 )
 
@@ -35,6 +35,7 @@ app.add_middleware(
 # 註冊 API 路由
 app.include_router(health.router)
 app.include_router(assignment.router)
+app.include_router(scheduling.router)  # 新增：註冊排程路由
 
 
 @app.get("/")
@@ -50,7 +51,11 @@ async def root():
         "version": "1.0.0",
         "status": "running",
         "docs": "/docs",
-        "health": "/api/health"
+        "health": "/api/health",
+        "algorithms": {
+            "hungarian": "/api/assignment",
+            "tshso_scheduling": "/api/scheduling"
+        }
     }
 
 
@@ -58,7 +63,9 @@ async def root():
 async def startup_event():
     """應用啟動事件"""
     print("🚀 Algorithm Service 啟動中...")
-    print("📊 可用演算法: 匈牙利演算法、排班演算法（開發中）")
+    print("📊 可用演算法:")
+    print("   - 匈牙利演算法 (護士排班)")
+    print("   - TS-HSO 演算法 (手術排程)")
     print("📖 API 文件: http://localhost:8000/docs")
 
 

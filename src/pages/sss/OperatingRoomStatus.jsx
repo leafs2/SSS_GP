@@ -1,3 +1,6 @@
+// OperatingRoomStatus.jsx - 串接真實排程資料版本
+// 主要修改：從資料庫讀取當天排程，而非模擬資料
+
 import React, { useState, useEffect } from 'react';
 import { 
   Activity, 
@@ -13,13 +16,14 @@ import Layout from './components/Layout';
 import PageHeader from './components/PageHeader';
 import { useAuth } from '../../pages/login/AuthContext';
 import surgeryRoomService from '../../services/surgeryRoomService';
+import tshsoSchedulingService from '../../services/TS-HSO_schedulingService';  // 新增
 
 const OperatingRoomStatus = () => {
   const { user } = useAuth();
   const userDepartment = user?.department_name || '外科部門';
   
   const [selectedCategory, setSelectedCategory] = useState(null);
-  const [currentDate] = useState(new Date());
+  const [currentDate, setCurrentDate] = useState(new Date());  // 修改：支援日期切換
   const [currentPage, setCurrentPage] = useState(0);
   
   // 資料狀態
@@ -31,31 +35,17 @@ const OperatingRoomStatus = () => {
   // 每頁顯示的手術室數量
   const ROOMS_PER_PAGE = 4;
 
-  // 載入手術室類型和資料
+  // === 載入手術室類型和資料 ===
   useEffect(() => {
     const loadSurgeryRoomData = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        // 取得手術室類型和數量
-        const response = await fetch(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/surgery-rooms/types-with-count`,
-          {
-            method: 'GET',
-            credentials: 'include',
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error('取得手術室資料失敗');
-        }
-
-        const data = await response.json();
+        const data = await surgeryRoomService.getTypesWithCount();
         
-        if (data.success && data.data) {
-          // 將 API 資料轉換為 categories 格式
-          const formattedCategories = data.data.map(item => ({
+        if (data && data.length > 0) {
+          const formattedCategories = data.map(item => ({
             id: item.type,
             name: item.displayName || item.type,
             total: item.roomCount,
@@ -65,94 +55,110 @@ const OperatingRoomStatus = () => {
 
           setCategories(formattedCategories);
 
-          // 如果有類型,設定第一個為預選
           if (formattedCategories.length > 0) {
             setSelectedCategory(formattedCategories[0].id);
           }
 
-          // 載入每個類型的手術室詳細資料
+          // 載入每個類型的手術室
           const roomsDataTemp = {};
           for (const category of formattedCategories) {
             const rooms = await surgeryRoomService.getRoomsByType(category.id);
-            roomsDataTemp[category.id] = rooms.map(room => ({
-              id: room.id,
-              surgeries: generateMockSurgeries(room.id) // 暫時使用模擬手術資料
-            }));
+            roomsDataTemp[category.id] = rooms;
           }
           
           setRoomsData(roomsDataTemp);
+
+          // 新增：載入當天真實排程資料
+          await loadTodaySchedule(formattedCategories, roomsDataTemp);
         }
       } catch (err) {
         console.error('載入手術室資料失敗:', err);
-        setError(err.message || '載入資料失敗,請稍後再試');
+        setError(err.error || err.message || '載入資料失敗,請稍後再試');
       } finally {
         setLoading(false);
       }
     };
 
     loadSurgeryRoomData();
-  }, []);
+  }, [currentDate]);  // 新增：日期改變時重新載入
 
-  // 模擬手術數據 - 未來可以從 API 取得真實手術排程
-  const generateMockSurgeries = (roomId) => {
-    const surgeries = [];
-    const surgeryTypes = [
-      { name: '心臟瓣膜置換術', duration: 240, doctor: '陳醫師' },
-      { name: '腹腔鏡膽囊切除術', duration: 120, doctor: '林醫師' },
-      { name: '脊椎融合手術', duration: 180, doctor: '王醫師' },
-      { name: '全膝關節置換術', duration: 150, doctor: '張醫師' },
-      { name: '甲狀腺切除術', duration: 90, doctor: '李醫師' },
-      { name: '子宮肌瘤切除術', duration: 120, doctor: '黃醫師' },
-      { name: '白內障手術', duration: 60, doctor: '周醫師' },
-      { name: '鼻竇內視鏡手術', duration: 90, doctor: '吳醫師' }
-    ];
-
-    // 隨機生成 1-3 個手術
-    const numSurgeries = Math.floor(Math.random() * 4);
-    let currentTime = 8; // 從早上 8 點開始
-
-    for (let i = 0; i < numSurgeries; i++) {
-      const surgery = surgeryTypes[Math.floor(Math.random() * surgeryTypes.length)];
-      const startHour = currentTime;
-      const startMinute = Math.random() > 0.5 ? 0 : 30;
-      const endHour = startHour + Math.floor(surgery.duration / 60);
-      const endMinute = (startMinute + (surgery.duration % 60)) % 60;
+  // === 新增：載入當天排程資料 ===
+  const loadTodaySchedule = async (cats, rooms) => {
+    try {
+      const dateStr = currentDate.toISOString().split('T')[0];
       
-      const now = new Date();
-      const surgeryStart = new Date(now);
-      surgeryStart.setHours(startHour, startMinute, 0);
-      const surgeryEnd = new Date(now);
-      surgeryEnd.setHours(endHour, endMinute, 0);
-
-      // 判斷手術狀態
-      let status = 'scheduled';
-      if (now >= surgeryStart && now <= surgeryEnd) {
-        status = 'ongoing';
-      } else if (now > surgeryEnd) {
-        status = 'completed';
-      }
-
-      surgeries.push({
-        id: `${roomId}-${i}`,
-        name: surgery.name,
-        doctor: surgery.doctor,
-        patient: `病患${Math.floor(Math.random() * 1000)}`,
-        startTime: `${String(startHour).padStart(2, '0')}:${String(startMinute).padStart(2, '0')}`,
-        endTime: `${String(endHour).padStart(2, '0')}:${String(endMinute).padStart(2, '0')}`,
-        duration: surgery.duration,
-        status: status,
-        top: (startHour - 6) * 80 + (startMinute / 60) * 80,
-        height: (surgery.duration / 60) * 80
+      // 呼叫 API 取得當天排程
+      const schedules = await tshsoSchedulingService.fetchScheduleByDate(dateStr);
+      
+      // 整理成介面需要的格式
+      cats.forEach(category => {
+        const categoryRooms = rooms[category.id] || [];
+        
+        categoryRooms.forEach(room => {
+          // 找出這個手術室當天的手術
+          const roomSurgeries = schedules.filter(s => s.room_id === room.id);
+          
+          // 轉換為前端格式
+          room.surgeries = roomSurgeries.map(s => {
+            const startTime = s.start_time.substring(0, 5);  // "HH:MM"
+            const endTime = s.end_time.substring(0, 5);
+            
+            // 計算位置（基於時間軸）
+            const [startHour, startMinute] = startTime.split(':').map(Number);
+            const [endHour, endMinute] = endTime.split(':').map(Number);
+            
+            const top = (startHour - 6) * 80 + (startMinute / 60) * 80;
+            const durationMinutes = (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
+            const height = (durationMinutes / 60) * 80;
+            
+            return {
+              id: s.surgery_id,
+              name: s.surgery_name || s.surgery_type_code,
+              doctor: s.doctor_name,
+              patient: s.patient_name,
+              startTime: startTime,
+              endTime: endTime,
+              duration: s.duration * 60,  // 轉換為分鐘
+              status: determineStatus(startTime, endTime),
+              top: top,
+              height: height
+            };
+          });
+        });
       });
-
-      currentTime = endHour + (endMinute > 0 ? 1 : 0);
-      if (currentTime >= 18) break;
+      
+    } catch (err) {
+      console.error('載入排程資料失敗:', err);
+      // 失敗時設定空排程
+      Object.values(rooms).flat().forEach(room => {
+        room.surgeries = [];
+      });
     }
-
-    return surgeries;
   };
 
-  // 計算統計數據
+  // === 新增：判斷手術狀態 ===
+  const determineStatus = (startTime, endTime) => {
+    const now = new Date();
+    
+    const [startHour, startMinute] = startTime.split(':').map(Number);
+    const [endHour, endMinute] = endTime.split(':').map(Number);
+    
+    const surgeryStart = new Date(currentDate);
+    surgeryStart.setHours(startHour, startMinute, 0);
+    
+    const surgeryEnd = new Date(currentDate);
+    surgeryEnd.setHours(endHour, endMinute, 0);
+    
+    if (now >= surgeryStart && now <= surgeryEnd) {
+      return 'ongoing';
+    } else if (now > surgeryEnd) {
+      return 'completed';
+    } else {
+      return 'scheduled';
+    }
+  };
+
+  // === 計算統計數據 ===
   const calculateStats = () => {
     if (!selectedCategory || !roomsData[selectedCategory]) {
       return { ongoingCount: 0, completedCount: 0, totalCount: 0, usageRate: 0 };
@@ -166,7 +172,9 @@ const OperatingRoomStatus = () => {
 
     currentCategory.forEach(room => {
       let hasOngoingSurgery = false;
-      room.surgeries.forEach(surgery => {
+      const surgeries = room.surgeries || [];
+      
+      surgeries.forEach(surgery => {
         totalCount++;
         if (surgery.status === 'ongoing') {
           ongoingCount++;
@@ -176,6 +184,7 @@ const OperatingRoomStatus = () => {
           completedCount++;
         }
       });
+      
       if (hasOngoingSurgery) {
         roomsInUse++;
       }
@@ -208,6 +217,13 @@ const OperatingRoomStatus = () => {
     setCurrentPage(pageIndex);
   };
 
+  // === 新增：切換日期 ===
+  const handleDateChange = (offset) => {
+    const newDate = new Date(currentDate);
+    newDate.setDate(newDate.getDate() + offset);
+    setCurrentDate(newDate);
+  };
+
   // 時間軸（6:00 - 22:00）
   const timeSlots = Array.from({ length: 17 }, (_, i) => i + 6);
 
@@ -225,15 +241,12 @@ const OperatingRoomStatus = () => {
     }
   };
 
-  // 載入中狀態
+  // 載入中狀態（保持原樣）
   if (loading) {
     return (
       <Layout>
         <div className="min-h-full bg-gray-50">
-          <PageHeader 
-            title="手術室使用情形" 
-            subtitle={userDepartment}
-          />
+          <PageHeader title="手術室使用情形" subtitle={userDepartment} />
           <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
             <div className="flex items-center justify-center h-96">
               <div className="text-center">
@@ -247,15 +260,12 @@ const OperatingRoomStatus = () => {
     );
   }
 
-  // 錯誤狀態
+  // 錯誤狀態（保持原樣）
   if (error) {
     return (
       <Layout>
         <div className="min-h-full bg-gray-50">
-          <PageHeader 
-            title="手術室使用情形" 
-            subtitle={userDepartment}
-          />
+          <PageHeader title="手術室使用情形" subtitle={userDepartment} />
           <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
             <div className="flex items-center justify-center h-96">
               <div className="text-center">
@@ -276,38 +286,11 @@ const OperatingRoomStatus = () => {
     );
   }
 
-  // 沒有資料狀態
-  if (categories.length === 0) {
-    return (
-      <Layout>
-        <div className="min-h-full bg-gray-50">
-          <PageHeader 
-            title="手術室使用情形" 
-            subtitle={userDepartment}
-          />
-          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <div className="flex items-center justify-center h-96">
-              <div className="text-center">
-                <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-600">目前沒有可用的手術室資料</p>
-              </div>
-            </div>
-          </main>
-        </div>
-      </Layout>
-    );
-  }
-
   return (
     <Layout>
       <div className="min-h-full bg-gray-50">
-        {/* 頂部標題欄 */}
-        <PageHeader 
-          title="手術室使用情形" 
-          subtitle={userDepartment}
-        />
+        <PageHeader title="手術室使用情形" subtitle={userDepartment} />
 
-        {/* 主要內容區域 */}
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 overflow-x-auto">
           {/* 類別切換區域 */}
           <div className="bg-white rounded-lg shadow-md mb-4 p-4">
@@ -378,16 +361,48 @@ const OperatingRoomStatus = () => {
               </div>
             </div>
 
-            {/* 類別說明 */}
-            {currentCategory && (
-              <div className="text-sm text-gray-600 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4" />
-                <span>{currentCategory.subtitle}</span>
+            {/* 類別說明 + 日期切換 */}
+            <div className="flex items-center justify-between">
+              {currentCategory && (
+                <div className="text-sm text-gray-600 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4" />
+                  <span>{currentCategory.subtitle}</span>
+                </div>
+              )}
+              
+              {/* 新增：日期切換 */}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => handleDateChange(-1)}
+                  className="p-2 rounded-lg bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                
+                <div className="text-center min-w-[150px]">
+                  <div className="text-sm font-medium text-gray-600 mb-0.5">
+                    {currentDate.toLocaleDateString('zh-TW', { weekday: 'long' })}
+                  </div>
+                  <div className="text-lg font-bold text-gray-800">
+                    {currentDate.toLocaleDateString('zh-TW', { 
+                      year: 'numeric', 
+                      month: '2-digit', 
+                      day: '2-digit' 
+                    })}
+                  </div>
+                </div>
+                
+                <button
+                  onClick={() => handleDateChange(1)}
+                  className="p-2 rounded-lg bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
               </div>
-            )}
+            </div>
           </div>
 
-          {/* 手術室排程表容器 */}
+          {/* 手術室排程表容器（保持原樣）*/}
           <div className="bg-white rounded-lg shadow-md">
             {/* 分頁控制器 */}
             {totalPages > 1 && (
@@ -458,13 +473,13 @@ const OperatingRoomStatus = () => {
                   <div key={room.id} className="flex-shrink-0 w-64">
                     {/* 手術室標題 */}
                     <div className={`h-16 border-2 border-gray-300 rounded-t-lg flex flex-col items-center justify-center shadow-sm transition-colors ${
-                      room.surgeries.filter(s => s.status === 'ongoing').length > 0 
+                      (room.surgeries || []).filter(s => s.status === 'ongoing').length > 0 
                         ? 'bg-green-100 border-green-400' 
                         : 'bg-white'
                     }`}>
                       <div className="font-bold text-lg text-gray-900">{room.id}</div>
                       <div className="text-xs text-gray-500">
-                        {room.surgeries.filter(s => s.status === 'ongoing').length > 0 ? (
+                        {(room.surgeries || []).filter(s => s.status === 'ongoing').length > 0 ? (
                           <span className="flex items-center gap-1 text-green-600 font-medium">
                             <Activity className="w-3 h-3" />
                             使用中
@@ -486,7 +501,7 @@ const OperatingRoomStatus = () => {
                       ))}
 
                       {/* 手術卡片 */}
-                      {room.surgeries.map((surgery) => (
+                      {(room.surgeries || []).map((surgery) => (
                         <div
                           key={surgery.id}
                           className={`

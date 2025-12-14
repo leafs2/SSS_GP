@@ -35,6 +35,9 @@ import assistantShiftRoutes, {
 import surgeryRecommendationRouter, {
   setPool as setSurgeryRecommendationPool,
 } from "./surgeryRecommendationRoutes.js";
+import tshsoSchedulingRouter, {
+  setPool as setTshsoSchedulingPool,
+} from "./tshsoScheduling.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -67,6 +70,7 @@ setSurgeryRoomsPool(pool);
 setSurgeryPool(pool);
 setAssistantShiftsPool(pool);
 setSurgeryRecommendationPool(pool);
+setTshsoSchedulingPool(pool);
 
 const app = express();
 
@@ -137,6 +141,7 @@ app.use("/api/surgery-rooms", surgeryRoomsRouter);
 app.use("/api/surgery", surgeryRouter);
 app.use("/api/assistant-shifts", assistantShiftRoutes);
 app.use("/api/surgery-recommendation", surgeryRecommendationRouter);
+app.use("/api/tshso-scheduling", tshsoSchedulingRouter);
 
 // 開發環境專用路由
 if (process.env.NODE_ENV === "development") {
