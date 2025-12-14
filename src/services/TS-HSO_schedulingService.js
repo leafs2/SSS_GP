@@ -67,24 +67,30 @@ const tshsoSchedulingService = {
   },
 
   /**
-   * 取得待排程數量
+   * 取得待排程數量 (支援日期範圍)
+   * @param {string} startDate - (選填) 開始日期
+   * @param {string} endDate - (選填) 結束日期
    */
-  fetchPendingCount: async () => {
+  fetchPendingCount: async (startDate = null, endDate = null) => {
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/tshso-scheduling/pending/count`,
-        {
-          credentials: "include",
-        }
-      );
+      // 建構 URL 參數
+      let url = `${API_BASE_URL}/api/tshso-scheduling/pending/count`;
+      if (startDate && endDate) {
+        url += `?start_date=${startDate}&end_date=${endDate}`;
+      }
 
+      const response = await fetch(url, { credentials: "include" });
       const data = await response.json();
 
       if (!data.success) {
         throw new Error(data.message || "取得待排程數量失敗");
       }
 
-      return data.count;
+      // 回傳完整物件 (包含 count 和 last_updated)
+      return {
+        count: data.count,
+        last_updated: data.last_updated,
+      };
     } catch (error) {
       console.error("取得待排程數量失敗:", error);
       throw error;

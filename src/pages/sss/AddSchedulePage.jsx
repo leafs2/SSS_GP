@@ -33,13 +33,13 @@ import { useMySchedule } from '../../hooks/useSchedule';
 import { useMySurgeryTypes } from '../../hooks/useSurgeryType';
 import { useAuth } from '../login/AuthContext';
 
-// ✨ 使用 Service 統一管理 API 呼叫
 import surgeryTypeService from '../../services/surgeryTypeService';
 import surgeryService from '../../services/surgeryService';
 import IBRSAService from '../../services/IBRSAService';
 import employeeService from '../../services/employeeService';
 import surgeryRoomService from '../../services/surgeryRoomService';
 import patientService from '../../services/patientService';
+import tshsoSchedulingService from '../../services/TS-HSO_schedulingService';
 
 const AddSchedulePage = () => {
   const { user } = useAuth(); // 取得當前登入醫師資訊
@@ -93,7 +93,7 @@ const AddSchedulePage = () => {
   const [assistantDoctors, setAssistantDoctors] = useState([]);
   const [loadingAssistants, setLoadingAssistants] = useState(false);
 
-  // ✅ 修改：載入助手醫師列表 - 使用 employeeService
+  // 載入助手醫師列表 - 使用 employeeService
   useEffect(() => {
     const loadAssistantDoctors = async () => {
       if (!department) return;
@@ -114,7 +114,7 @@ const AddSchedulePage = () => {
     loadAssistantDoctors();
   }, [department]);
 
-  // ✅ 修改：載入手術室類型列表 - 使用 surgeryRoomService
+  // 載入手術室類型列表 - 使用 surgeryRoomService
   useEffect(() => {
     const loadRoomTypes = async () => {
       setLoadingRoomTypes(true);
@@ -492,7 +492,7 @@ const AddSchedulePage = () => {
         nurseCount: parseInt(formData.nurseCount)
       };
 
-      console.log('📤 送出手術排程資料:', surgeryData);
+      console.log('送出手術排程資料:', surgeryData);
 
       // 呼叫 API
       const result = await surgeryService.createSurgery(surgeryData);
@@ -500,6 +500,17 @@ const AddSchedulePage = () => {
       console.log('✅ 手術排程新增成功:', result);
       
       alert(`手術排程已成功新增！\n手術編號：${result.data.surgeryId}`);
+
+      try {
+        console.log('執行自動排程檢查...');
+        // 方案 A (依照演算法閾值): await tshsoSchedulingService.checkAndTrigger();
+        
+        // 直接觸發更新
+        await tshsoSchedulingService.triggerScheduling(); 
+        console.log('✅ 自動排程更新完成');
+      } catch (scheduleError) {
+        console.warn('⚠️ 自動排程觸發失敗 (不影響新增結果):', scheduleError);
+      }
       
       // 重置表單
       setFormData({
