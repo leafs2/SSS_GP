@@ -482,12 +482,17 @@ const AddSchedulePage = () => {
 
     try {
       // 準備送到後端的資料
+      const year = selectedDate.getFullYear();
+      const month = String(selectedDate.getMonth() + 1).padStart(2, '0'); // 月份從0開始，需+1
+      const day = String(selectedDate.getDate()).padStart(2, '0');
+      const localDateString = `${year}-${month}-${day}`;
+
       const surgeryData = {
         patientId: parseInt(formData.patientId),
         assistantDoctorId: formData.assistantDoctor || null,
         surgeryTypeCode: formData.surgeryCode,
         surgeryRoomType: formData.roomType,
-        surgeryDate: selectedDate.toISOString().split('T')[0], // YYYY-MM-DD 格式
+        surgeryDate: localDateString, // YYYY-MM-DD 格式
         duration: formData.estimatedHours,
         nurseCount: parseInt(formData.nurseCount)
       };

@@ -88,7 +88,12 @@ const SurgerySchedule = () => {
   // === 狀態判斷與樣式 ===
   const determineStatus = (surgeryDate, startTime, endTime) => {
     const now = new Date();
-    const sDateStr = typeof surgeryDate === 'string' ? surgeryDate.substring(0, 10) : '';
+    let sDateStr = '';
+    if (surgeryDate) {
+        const d = new Date(surgeryDate);
+        sDateStr = toLocalISODate(d);
+    }
+    
     if (!sDateStr) return 'tentative';
 
     const todayStr = toLocalISODate(now);
@@ -208,13 +213,11 @@ const SurgerySchedule = () => {
           const dateKey = toLocalISODate(date);
           
           const daySurgeries = allScheduleData.filter(s => {
-            let sDateStr = '';
-            if (typeof s.surgery_date === 'string') {
-                sDateStr = s.surgery_date.substring(0, 10);
-            } else if (s.surgery_date) {
-                const d = new Date(s.surgery_date);
-                sDateStr = toLocalISODate(d);
-            }
+            if (!s.surgery_date) return false;
+
+            const d = new Date(s.surgery_date);
+            const sDateStr = toLocalISODate(d);
+            
             return s.room_id === room.id && sDateStr === dateKey;
           }).map(s => ({
             id: s.surgery_id,
