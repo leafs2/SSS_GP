@@ -14,9 +14,9 @@ class CostWeights(BaseModel):
     """
     成本權重配置
     """
-    familiarity: float = Field(0.5, ge=0.0, le=1.0, description="熟悉度權重")
+    familiarity: float = Field(0.2, ge=0.0, le=1.0, description="熟悉度權重")
     workload: float = Field(0.3, ge=0.0, le=1.0, description="工作負荷權重")
-    experience: float = Field(0.2, ge=0.0, le=1.0, description="資歷匹配權重")
+    experience: float = Field(0.5, ge=0.0, le=1.0, description="資歷匹配權重")
     
     class Config:
         json_schema_extra = {

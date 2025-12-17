@@ -31,9 +31,9 @@ export const assignNursesWithHungarian = async (params) => {
           rooms: params.rooms,
           config: params.config || {
             cost_weights: {
-              familiarity: 0.5,
+              familiarity: 0.2,
               workload: 0.3,
-              experience: 0.2,
+              role_fairness: 0.5,
             },
           },
         }),
@@ -106,7 +106,11 @@ export const formatNursesForAlgorithm = (nurses) => {
     scheduling_time: nurse.schedulingTime || nurse.scheduling_time,
     last_assigned_room: nurse.lastAssignedRoom || nurse.surgery_room_id || null,
     workload_this_week: nurse.workloadThisWeek || 0,
-    experience_years: nurse.experienceYears || 0,
+    history_fixed_count:
+      nurse.historyFixedCount || nurse.history_fixed_count || 0,
+    history_float_count:
+      nurse.historyFloatCount || nurse.history_float_count || 0,
+    workload_this_week: nurse.workloadThisWeek || 0,
   }));
 };
 

@@ -463,9 +463,9 @@ const NurseShiftManagePage = () => {
           rooms: formattedRooms,
           config: {
             cost_weights: {
-              familiarity: 0.5,
+              familiarity: 0.4,
               workload: 0.3,
-              experience: 0.2
+              role_fairness: 0.3 
             }
           }
         });
@@ -1289,7 +1289,7 @@ const NurseShiftManagePage = () => {
                             <div className="bg-purple-50 rounded p-2">
                               <p className="text-xs text-gray-600">流動護士</p>
                               <p className="text-lg font-bold text-purple-700">
-                                {algorithmResults.floatSchedules[roomType].summary?.total_float_nurses}
+                                {algorithmResults.floatSchedules[roomType]?.summary?.total_float_nurses || 0}
                               </p>
                             </div>
                             <div className="bg-gray-50 rounded p-2">

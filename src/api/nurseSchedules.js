@@ -363,9 +363,13 @@ router.get("/department-nurses", requireNurse, async (req, res) => {
           e.employee_id,
           e.name,
           e.department_code,
-          d.name as department_name
+          d.name as department_name,
+          COALESCE(nrh.total_fixed_count, 0) as history_fixed_count,
+          COALESCE(nrh.total_float_count, 0) as history_float_count,
+          0 as workload_this_week
         FROM employees e
         LEFT JOIN departments d ON e.department_code = d.code
+        LEFT JOIN nurse_role_history nrh ON e.employee_id = nrh.employee_id
         WHERE e.department_code = $1 
           AND e.role = 'N'
           AND e.status = 'active'
@@ -639,8 +643,6 @@ router.post("/batch-save", requireNurse, async (req, res) => {
   }
 });
 
-// 在 src/api/nurseSchedules.js 中加入這個新端點
-
 /**
  * POST /api/nurse-schedules/apply-algorithm-results
  * 應用演算法分配結果到資料庫
@@ -711,6 +713,30 @@ router.post("/apply-algorithm-results", requireNurse, async (req, res) => {
       }
     }
 
+    // 收集所有被排班的員工 ID
+    const scheduledEmployeeIds = [];
+    for (const [roomType, assignments] of Object.entries(
+      req.body.assignments
+    )) {
+      assignments.forEach((a) => scheduledEmployeeIds.push(a.employee_id));
+    }
+
+    if (scheduledEmployeeIds.length > 0) {
+      // 使用 Postgres 的 UPSERT (ON CONFLICT) 語法
+      const updateHistoryQuery = `
+            INSERT INTO nurse_role_history (employee_id, total_fixed_count, total_float_count)
+            SELECT unnest($1::text[]), 1, 0
+            ON CONFLICT (employee_id) 
+            DO UPDATE SET 
+                total_fixed_count = nurse_role_history.total_fixed_count + 1,
+                last_updated_at = CURRENT_TIMESTAMP
+        `;
+      await client.query(updateHistoryQuery, [scheduledEmployeeIds]);
+      console.log(
+        `✅ 已更新 ${scheduledEmployeeIds.length} 位護士的固定角色歷史計數`
+      );
+    }
+
     await client.query("COMMIT");
 
     console.log(`\n✅ 成功更新 ${totalUpdated} 筆記錄`);
@@ -753,42 +779,20 @@ router.post("/apply-float-schedule", requireNurse, async (req, res) => {
       });
     }
 
-    console.log("📝 開始應用流動護士排班:", { shift, floatSchedules });
-
-    // 轉換班別為中文
-    const shiftMap = {
-      morning: "早班",
-      evening: "晚班",
-      night: "大夜班",
-    };
-    const schedulingTime = shiftMap[shift];
+    console.log("📝 開始應用流動護士排班:", { shift });
 
     await client.query("BEGIN");
 
-    // 步驟 1: 刪除該時段的舊流動護士記錄
-    const { rows: shiftNurses } = await client.query(
-      `SELECT employee_id FROM nurse_schedule WHERE scheduling_time = $1`,
-      [schedulingTime]
-    );
-
-    const employeeIds = shiftNurses.map((n) => n.employee_id);
-
-    if (employeeIds.length > 0) {
-      await client.query(
-        `DELETE FROM nurse_float WHERE employee_id = ANY($1)`,
-        [employeeIds]
-      );
-      console.log(`✅ 已清除 ${employeeIds.length} 位護士的舊流動記錄`);
-    }
-
-    // 步驟 2: 插入新的流動護士記錄
+    // 1. 整理所有要寫入的資料，並收集所有涉及的 Employee IDs
     const floatRecords = [];
+    const employeeIdsToUpdate = new Set(); // 使用 Set 避免 ID 重複
 
     for (const roomType in floatSchedules) {
       const scheduleData = floatSchedules[roomType];
 
       if (scheduleData.schedule && scheduleData.schedule.length > 0) {
         scheduleData.schedule.forEach((record) => {
+          // 加入要寫入的紀錄
           floatRecords.push({
             employee_id: record.employee_id,
             mon: record.mon || null,
@@ -799,8 +803,24 @@ router.post("/apply-float-schedule", requireNurse, async (req, res) => {
             sat: record.sat || null,
             sun: record.sun || null,
           });
+
+          // 收集 ID 用於刪除舊資料
+          employeeIdsToUpdate.add(record.employee_id);
         });
       }
+    }
+
+    const employeeIdsArray = Array.from(employeeIdsToUpdate);
+
+    // 2. 【關鍵修正】先刪除這些護士的舊流動紀錄
+    if (employeeIdsArray.length > 0) {
+      console.log(
+        `🗑️ 正在清除 ${employeeIdsArray.length} 位護士的舊流動紀錄...`
+      );
+      await client.query(
+        `DELETE FROM nurse_float WHERE employee_id = ANY($1)`,
+        [employeeIdsArray]
+      );
     }
 
     if (floatRecords.length === 0) {
@@ -812,7 +832,7 @@ router.post("/apply-float-schedule", requireNurse, async (req, res) => {
       });
     }
 
-    // 批次插入
+    // 3. 執行插入新資料
     let insertedCount = 0;
     for (const record of floatRecords) {
       const result = await client.query(

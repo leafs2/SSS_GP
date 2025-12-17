@@ -61,9 +61,9 @@ async def hungarian_assignment(
         
         # 創建求解器
         solver = HungarianSolver(
-            familiarity_weight=cost_weights.get("familiarity", 0.5),
+            familiarity_weight=cost_weights.get("familiarity", 0.2),
             workload_weight=cost_weights.get("workload", 0.3),
-            experience_weight=cost_weights.get("experience", 0.2)
+            role_fairness_weight=cost_weights.get("role_fairness", 0.5)
         )
         
         # 執行分配
@@ -120,12 +120,12 @@ async def float_nurse_schedule(
         )
         
         # 步驟 2: 分配流動護士
-        strategy = request.config.get("strategy", "balanced") if request.config else "balanced"
+        # 【修正】將 Pydantic 物件轉換為字典，避免 'FloatNurseInput' object has no attribute 'get' 錯誤
+        float_nurses_dicts = [nurse.dict() for nurse in request.float_nurses]
         
         assignments = scheduler.assign_float_nurses(
-            float_nurses=request.float_nurses,
-            vacancies=vacancies,
-            strategy=strategy
+            float_nurses=float_nurses_dicts,
+            vacancies=vacancies
         )
         
         # 步驟 3: 格式化結果
@@ -134,7 +134,7 @@ async def float_nurse_schedule(
         # 步驟 4: 生成報告
         report = scheduler.generate_float_schedule_report(
             assignments=assignments,
-            float_nurses=request.float_nurses
+            float_nurses=request.float_nurses # 這裡可以維持原樣，或是也傳 dicts 都可以
         )
         
         return FloatNurseScheduleResponse(
@@ -147,6 +147,9 @@ async def float_nurse_schedule(
     except HTTPException:
         raise
     except Exception as e:
+        # 加入更詳細的錯誤日誌
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"流動護士排班失敗: {str(e)}"

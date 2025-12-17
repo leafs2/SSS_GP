@@ -20,7 +20,8 @@ class NurseInput(BaseModel):
     # 歷史資料 - 用於計算成本
     last_assigned_room: Optional[str] = Field(None, description="上次分配的手術室")
     workload_this_week: Optional[int] = Field(0, description="本週已工作天數")
-    experience_years: Optional[int] = Field(0, description="年資")
+    history_fixed_count: Optional[int] = Field(0, description="累計擔任固定角色的次數")
+    history_float_count: Optional[int] = Field(0, description="累計擔任流動角色的次數")
     
     class Config:
         json_schema_extra = {
@@ -31,7 +32,8 @@ class NurseInput(BaseModel):
                 "scheduling_time": "早班",
                 "last_assigned_room": "RSU01",
                 "workload_this_week": 3,
-                "experience_years": 5
+                "history_fixed_count": 10,  # 範例：當過 10 次固定
+                "history_float_count": 2    # 範例：當過 2 次流動
             }
         }
 

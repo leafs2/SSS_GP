@@ -18,50 +18,34 @@ class HungarianSolver:
     """
     匈牙利演算法求解器
     
-    將護士最佳化分配到手術室職位
+    將護士最佳化分配到手術室職位 (針對固定護士)
     """
     
     def __init__(
         self,
-        familiarity_weight: float = 0.5,
+        familiarity_weight: float = 0.2, 
         workload_weight: float = 0.3,
-        experience_weight: float = 0.2
+        role_fairness_weight: float = 0.5 
     ):
         """
         初始化求解器
-        
-        Args:
-            familiarity_weight: 熟悉度權重
-            workload_weight: 工作負荷權重
-            experience_weight: 資歷匹配權重
         """
+        # 【修正】傳遞正確的參數名稱給 CostCalculator
         self.cost_calculator = CostCalculator(
             familiarity_weight=familiarity_weight,
             workload_weight=workload_weight,
-            experience_weight=experience_weight
+            role_fairness_weight=role_fairness_weight
         )
     
     def expand_positions(
         self,
         rooms: List[SurgeryRoomInput]
     ) -> List[Tuple[str, int]]:
-        """
-        將手術室需求展開成職位列表
-        
-        例如：RSU01 需要 3 人 → [(RSU01, 1), (RSU01, 2), (RSU01, 3)]
-        
-        Args:
-            rooms: 手術室列表
-            
-        Returns:
-            職位列表 [(room_id, position), ...]
-        """
+        """將手術室需求展開成職位列表"""
         positions = []
-        
         for room in rooms:
             for pos in range(1, room.require_nurses + 1):
                 positions.append((room.room_id, pos))
-        
         return positions
     
     def solve(
@@ -69,39 +53,29 @@ class HungarianSolver:
         nurses: List[NurseInput],
         rooms: List[SurgeryRoomInput]
     ) -> Tuple[List[Tuple[int, int]], np.ndarray, Dict]:
-        """
-        執行匈牙利演算法求解
-        
-        Args:
-            nurses: 護士列表
-            rooms: 手術室列表
-            
-        Returns:
-            (分配結果, 成本矩陣, 成本明細)
-        """
+        """執行匈牙利演算法求解"""
         # 1. 展開職位
         positions = self.expand_positions(rooms)
         
         # 2. 創建成本矩陣
+        # CostCalculator 會自動處理 target_role='fixed'
         cost_matrix, cost_details = self.cost_calculator.create_cost_matrix(
             nurses, rooms, positions
         )
         
-        # 3. 補齊矩陣（處理護士數 ≠ 職位數）
+        # 3. 補齊矩陣
         n_nurses = len(nurses)
         n_positions = len(positions)
-        
         padded_matrix = self.cost_calculator.pad_cost_matrix(
             cost_matrix, n_nurses, n_positions
         )
         
-        # 4. 執行匈牙利演算法
+        # 4. 執行
         row_indices, col_indices = linear_sum_assignment(padded_matrix)
         
-        # 5. 過濾掉虛擬配對
+        # 5. 過濾
         assignments = []
         for row, col in zip(row_indices, col_indices):
-            # 只保留真實的護士和職位
             if row < n_nurses and col < n_positions:
                 assignments.append((row, col))
         
@@ -116,24 +90,8 @@ class HungarianSolver:
         cost_details: Dict,
         execution_time: float
     ) -> HungarianAssignmentResponse:
-        """
-        格式化回應資料
-        
-        Args:
-            nurses: 護士列表
-            rooms: 手術室列表
-            assignments: 分配結果 [(nurse_idx, position_idx), ...]
-            cost_matrix: 成本矩陣
-            cost_details: 成本明細
-            execution_time: 執行時間
-            
-        Returns:
-            格式化的回應物件
-        """
-        # 展開職位
+        """格式化回應資料"""
         positions = self.expand_positions(rooms)
-        
-        # 建立護士分配結果
         nurse_assignments: List[NurseAssignment] = []
         room_assignments_dict: Dict[str, List[str]] = {}
         total_cost = 0.0
@@ -143,7 +101,6 @@ class HungarianSolver:
             room_id, position = positions[position_idx]
             cost = cost_matrix[nurse_idx, position_idx]
             
-            # 建立分配結果
             assignment = NurseAssignment(
                 employee_id=nurse.employee_id,
                 nurse_name=nurse.name,
@@ -157,31 +114,28 @@ class HungarianSolver:
             
             nurse_assignments.append(assignment)
             
-            # 紀錄手術室分配
             if room_id not in room_assignments_dict:
                 room_assignments_dict[room_id] = []
             room_assignments_dict[room_id].append(nurse.employee_id)
-            
             total_cost += cost
         
-        # 建立手術室分配摘要
         room_summaries = {}
         for room_id, nurse_ids in room_assignments_dict.items():
-            # 計算該手術室的總成本
             room_cost = sum(
-                assignment.cost 
-                for assignment in nurse_assignments 
-                if assignment.assigned_room == room_id
+                a.cost for a in nurse_assignments 
+                if a.assigned_room == room_id
             )
             
+            # 【修正】移除 experience_mix 分析，因為已無資歷資料
+            # 若 RoomAssignmentSummary 模型是 Optional，這裡可以省略
+            # 若必須傳值，建議修改 RoomAssignmentSummary 模型移除該欄位，或傳入 "N/A"
             room_summaries[room_id] = RoomAssignmentSummary(
                 room_id=room_id,
                 nurses=nurse_ids,
                 total_cost=room_cost,
-                experience_mix=self._analyze_experience_mix(nurses, nurse_ids)
+                experience_mix="N/A" # 或改為 role_mix，視您模型定義而定
             )
         
-        # 建立元資料
         metadata = AssignmentMetadata(
             algorithm="hungarian",
             execution_time=execution_time,
@@ -204,32 +158,21 @@ class HungarianSolver:
         room_id: str,
         cost_details: Dict
     ) -> List[str]:
-        """
-        獲取分配原因
-        
-        Args:
-            nurse: 護士資料
-            room_id: 手術室編號
-            cost_details: 成本明細
-            
-        Returns:
-            原因列表
-        """
+        """獲取分配原因"""
         reasons = []
-        
-        # 從成本明細中找出該配對的資訊
         for key, detail in cost_details.items():
             if nurse.employee_id in key and room_id in key:
                 if detail["familiarity"] == 0.0:
                     reasons.append("high_familiarity")
-                elif detail["familiarity"] <= 5.0:
-                    reasons.append("moderate_familiarity")
                 
                 if detail["workload"] <= 4.0:
                     reasons.append("balanced_workload")
                 
-                if detail["experience"] == 0.0:
-                    reasons.append("optimal_experience_match")
+                # 【修正】檢查 role_fairness 而非 experience
+                # 若成本高，代表該員過去當太多次固定，這次不該選他（但若選了可能沒更好選擇）
+                # 若成本低，代表該員適合當固定
+                if detail.get("role_fairness", 10.0) < 5.0:
+                    reasons.append("good_role_balance")
                 
                 break
         
@@ -237,68 +180,19 @@ class HungarianSolver:
             reasons.append("acceptable_match")
         
         return reasons
-    
-    def _analyze_experience_mix(
-        self,
-        all_nurses: List[NurseInput],
-        assigned_nurse_ids: List[str]
-    ) -> str:
-        """
-        分析手術室的資歷組合
-        
-        Args:
-            all_nurses: 所有護士列表
-            assigned_nurse_ids: 分配到該手術室的護士編號
-            
-        Returns:
-            資歷組合描述 (balanced/senior/junior)
-        """
-        # 找出分配的護士
-        assigned_nurses = [
-            nurse for nurse in all_nurses 
-            if nurse.employee_id in assigned_nurse_ids
-        ]
-        
-        if not assigned_nurses:
-            return "unknown"
-        
-        # 計算平均年資
-        avg_experience = sum(
-            nurse.experience_years or 0 
-            for nurse in assigned_nurses
-        ) / len(assigned_nurses)
-        
-        if avg_experience >= 4:
-            return "senior"
-        elif avg_experience >= 2:
-            return "balanced"
-        else:
-            return "junior"
+
+    # 【刪除】 _analyze_experience_mix 函式已刪除，因為不再有 experience_years
     
     def assign(
         self,
         nurses: List[NurseInput],
         rooms: List[SurgeryRoomInput]
     ) -> HungarianAssignmentResponse:
-        """
-        主要入口：執行完整的分配流程
-        
-        Args:
-            nurses: 護士列表
-            rooms: 手術室列表
-            
-        Returns:
-            分配結果
-        """
+        """主要入口"""
         start_time = time.time()
-        
-        # 執行匈牙利演算法
         assignments, cost_matrix, cost_details = self.solve(nurses, rooms)
-        
-        # 計算執行時間
         execution_time = time.time() - start_time
         
-        # 格式化回應
         response = self.format_response(
             nurses=nurses,
             rooms=rooms,
@@ -307,5 +201,4 @@ class HungarianSolver:
             cost_details=cost_details,
             execution_time=execution_time
         )
-        
         return response

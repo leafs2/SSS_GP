@@ -5,7 +5,7 @@ Cost Calculator
 """
 
 import numpy as np
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from ...models.nurse import NurseInput
 from ...models.room import SurgeryRoomInput
 
@@ -19,9 +19,9 @@ class CostCalculator:
     
     def __init__(
         self,
-        familiarity_weight: float = 0.5,
+        familiarity_weight: float = 0.2,
         workload_weight: float = 0.3,
-        experience_weight: float = 0.2
+        role_fairness_weight: float = 0.5
     ):
         """
         初始化成本計算器
@@ -33,7 +33,7 @@ class CostCalculator:
         """
         self.familiarity_weight = familiarity_weight
         self.workload_weight = workload_weight
-        self.experience_weight = experience_weight
+        self.role_fairness_weight = role_fairness_weight
     
     def calculate_familiarity_cost(
         self,
@@ -64,7 +64,7 @@ class CostCalculator:
     
     def calculate_workload_cost(
         self,
-        nurse: NurseInput
+        workload_val: int
     ) -> float:
         """
         計算工作負荷成本
@@ -77,89 +77,67 @@ class CostCalculator:
         Returns:
             工作負荷成本 (0.0-10.0)
         """
-        workload = nurse.workload_this_week or 0
         
         # 線性增加：0天=0成本, 5天=10成本
-        return min(workload * 2.0, 10.0)
+        return min(workload_val * 2.0, 10.0)
     
-    def calculate_experience_cost(
-        self,
-        nurse: NurseInput,
-        room: SurgeryRoomInput
-    ) -> float:
+    # 計算角色公平性成本
+    def calculate_role_fairness_cost(self, nurse, target_role: str) -> float:
         """
-        計算資歷匹配成本
+        target_role: 'fixed' (固定) 或 'float' (流動)
+        """
+        # 讀取模型中的歷史數據
+        h_fixed = getattr(nurse, 'history_fixed_count', 0)
+        h_float = getattr(nurse, 'history_float_count', 0)
+        total = h_fixed + h_float
         
-        資深護士適合複雜手術室，新手適合簡單手術室
-        
-        Args:
-            nurse: 護士資料
-            room: 手術室資料
+        # 防止除以零
+        if total == 0:
+            return 0.0
             
-        Returns:
-            資歷匹配成本 (0.0-10.0)
-        """
-        experience = nurse.experience_years or 0
-        complexity = room.complexity or "medium"
+        epsilon = 1e-6 # 避免浮點數誤差
         
-        # 定義資歷等級
-        if experience >= 5:
-            nurse_level = "senior"  # 資深
-        elif experience >= 2:
-            nurse_level = "mid"     # 中等
-        else:
-            nurse_level = "junior"  # 新手
-        
-        # 定義最佳配對
-        optimal_matches = {
-            ("senior", "high"): 0.0,      # 資深 + 複雜 = 最佳
-            ("senior", "medium"): 3.0,    # 資深 + 中等 = 良好
-            ("senior", "low"): 5.0,       # 資深 + 簡單 = 浪費
-            ("mid", "high"): 5.0,         # 中等 + 複雜 = 勉強
-            ("mid", "medium"): 0.0,       # 中等 + 中等 = 最佳
-            ("mid", "low"): 3.0,          # 中等 + 簡單 = 良好
-            ("junior", "high"): 10.0,     # 新手 + 複雜 = 不佳
-            ("junior", "medium"): 5.0,    # 新手 + 中等 = 勉強
-            ("junior", "low"): 0.0,       # 新手 + 簡單 = 最佳
-        }
-        
-        return optimal_matches.get((nurse_level, complexity), 5.0)
+        if target_role == 'fixed':
+            # 如果這次要排固定，過去當過越多次固定，成本越高 (不公平)
+            ratio = h_fixed / (total + epsilon)
+        else: # target_role == 'float'
+            # 如果這次要排流動，過去當過越多次流動，成本越高
+            ratio = h_float / (total + epsilon)
+            
+        return ratio * 10.0
+
     
     def calculate_total_cost(
         self,
-        nurse: NurseInput,
-        room: SurgeryRoomInput,
-        room_id: str
+        nurse,
+        room_id: str,
+        target_role: str = 'fixed', # 預設為固定，流動排班時需傳入 'float'
+        current_workload: Optional[int] = None
     ) -> Tuple[float, Dict[str, float]]:
-        """
-        計算總成本（加權組合）
         
-        Args:
-            nurse: 護士資料
-            room: 手術室資料
-            room_id: 手術室編號
-            
-        Returns:
-            (總成本, 成本明細字典)
-        """
-        familiarity_cost = self.calculate_familiarity_cost(nurse, room_id)
-        workload_cost = self.calculate_workload_cost(nurse)
-        experience_cost = self.calculate_experience_cost(nurse, room)
+        # 1. 熟悉度
+        fam_cost = self.calculate_familiarity_cost(nurse, room_id)
         
-        total_cost = (
-            self.familiarity_weight * familiarity_cost +
-            self.workload_weight * workload_cost +
-            self.experience_weight * experience_cost
+        # 2. 工作負荷 (支援動態傳入)
+        w_val = current_workload if current_workload is not None else getattr(nurse, 'workload_this_week', 0)
+        work_cost = self.calculate_workload_cost(w_val)
+        
+        # 3. 【修改】角色公平性
+        fair_cost = self.calculate_role_fairness_cost(nurse, target_role)
+        
+        # 計算總分
+        total = (
+            self.familiarity_weight * fam_cost +
+            self.workload_weight * work_cost +
+            self.role_fairness_weight * fair_cost
         )
         
-        breakdown = {
-            "familiarity": familiarity_cost,
-            "workload": workload_cost,
-            "experience": experience_cost,
-            "total": total_cost
+        return total, {
+            "familiarity": fam_cost,
+            "workload": work_cost,
+            "role_fairness": fair_cost,
+            "total": total
         }
-        
-        return total_cost, breakdown
     
     def create_cost_matrix(
         self,
