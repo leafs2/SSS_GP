@@ -143,6 +143,18 @@ router.get("/shift-assignments/:shift", requireNurse, async (req, res) => {
         ns.scheduling_time,
         ns.surgery_room_type,
         ns.surgery_room_id,
+        
+        -- 【關鍵修正 1】這裡原本漏掉了，現在補上查詢歷史紀錄
+        COALESCE(nrh.total_fixed_count, 0) as total_fixed_count,
+        COALESCE(nrh.total_float_count, 0) as total_float_count,
+        
+        -- 【關鍵修正 2】這裡加入本週工作量計算 (示範邏輯：計算他在排班表的出現次數)
+        (
+            SELECT COUNT(*) 
+            FROM nurse_schedule ns_count 
+            WHERE ns_count.employee_id = e.employee_id
+        )::integer as workload_this_week,
+
         COALESCE(
           array_agg(nd.day_off ORDER BY nd.day_off) FILTER (WHERE nd.day_off IS NOT NULL),
           ARRAY[]::bigint[]
@@ -150,6 +162,8 @@ router.get("/shift-assignments/:shift", requireNurse, async (req, res) => {
       FROM employees e
       JOIN nurse_schedule ns ON e.employee_id = ns.employee_id
       LEFT JOIN nurse_dayoff nd ON e.employee_id = nd.id
+      -- 【關鍵修正 3】一定要 JOIN 歷史紀錄表，不然查不到數據
+      LEFT JOIN nurse_role_history nrh ON e.employee_id = nrh.employee_id
       WHERE e.department_code = $1 
         AND e.role = 'N'
         AND e.status = 'active'
@@ -159,7 +173,9 @@ router.get("/shift-assignments/:shift", requireNurse, async (req, res) => {
         e.name, 
         ns.scheduling_time,
         ns.surgery_room_type,
-        ns.surgery_room_id
+        ns.surgery_room_id,
+        nrh.total_fixed_count,  -- GROUP BY 必須包含新加入的欄位
+        nrh.total_float_count
       ORDER BY ns.surgery_room_type, e.name
     `;
 
@@ -182,6 +198,9 @@ router.get("/shift-assignments/:shift", requireNurse, async (req, res) => {
         name: row.name,
         dayOff: dayOff,
         surgeryRoomId: row.surgery_room_id,
+        total_fixed_count: row.total_fixed_count,
+        total_float_count: row.total_float_count,
+        workload_this_week: row.workload_this_week,
       });
     });
 
@@ -356,29 +375,65 @@ router.get("/department-nurses", requireNurse, async (req, res) => {
     let params;
 
     if (currentSchedulingTime) {
-      // 排除已在"其他時段"排班的護士
-      // 保留：1) 完全沒排班的護士  2) 已在當前時段排班的護士
       query = `
         SELECT 
           e.employee_id,
           e.name,
           e.department_code,
           d.name as department_name,
-          COALESCE(nrh.total_fixed_count, 0) as history_fixed_count,
-          COALESCE(nrh.total_float_count, 0) as history_float_count,
-          0 as workload_this_week
+          
+          -- 1. 歷史角色計數 (對齊 Python 模型名稱)
+          COALESCE(nrh.total_fixed_count, 0) as total_fixed_count,
+          COALESCE(nrh.total_float_count, 0) as total_float_count,
+
+          -- 2. 上次分配的手術室 (Last Assigned Room)
+          -- 如果是固定護理師(有值)，回傳該 ID
+          -- 如果是流動護理師(NULL)，回傳 NULL (演算法會依此判斷非原位續任)
+          ns.surgery_room_id as last_assigned_room,
+          
+          -- 3. 真實本週工作量計算 (Workload Calculation)
+          CASE 
+            -- 情境 A: 固定護理師 (有分配手術室) -> 視為 5 天 (或您的業務邏輯定義)
+            WHEN ns.surgery_room_id IS NOT NULL THEN 5
+            
+            -- 情境 B: 流動護理師 (無分配手術室) -> 計算 nurse_float 表中的排班天數
+            ELSE (
+              SELECT 
+                (CASE WHEN nf.mon IS NOT NULL THEN 1 ELSE 0 END) +
+                (CASE WHEN nf.tues IS NOT NULL THEN 1 ELSE 0 END) +
+                (CASE WHEN nf.wed IS NOT NULL THEN 1 ELSE 0 END) +
+                (CASE WHEN nf.thu IS NOT NULL THEN 1 ELSE 0 END) +
+                (CASE WHEN nf.fri IS NOT NULL THEN 1 ELSE 0 END) +
+                (CASE WHEN nf.sat IS NOT NULL THEN 1 ELSE 0 END) +
+                (CASE WHEN nf.sun IS NOT NULL THEN 1 ELSE 0 END)
+              FROM nurse_float nf 
+              WHERE nf.employee_id = e.employee_id
+            )
+          END as workload_this_week
+
         FROM employees e
         LEFT JOIN departments d ON e.department_code = d.code
         LEFT JOIN nurse_role_history nrh ON e.employee_id = nrh.employee_id
+        -- 加入排班表以取得當前狀態
+        LEFT JOIN nurse_schedule ns ON e.employee_id = ns.employee_id AND ns.scheduling_time = $2
+        
         WHERE e.department_code = $1 
           AND e.role = 'N'
           AND e.status = 'active'
+          AND (
+            -- 篩選邏輯：
+            -- 1. 完全沒排班的人 (ns.employee_id IS NULL) -> 視為可排班的新人
+            ns.employee_id IS NULL
+            OR 
+            -- 2. 已經在"當前時段"排班的人 (我們要重新排班他們)
+            ns.scheduling_time = $2
+          )
+          -- 排除：已經在"其他時段"排班的人
           AND NOT EXISTS (
-            -- 排除在"其他時段"排班的護士
             SELECT 1 
-            FROM nurse_schedule ns 
-            WHERE ns.employee_id = e.employee_id 
-              AND ns.scheduling_time != $2
+            FROM nurse_schedule ns_check
+            WHERE ns_check.employee_id = e.employee_id 
+              AND ns_check.scheduling_time != $2
           )
         ORDER BY e.name
       `;
@@ -721,6 +776,18 @@ router.post("/apply-algorithm-results", requireNurse, async (req, res) => {
       assignments.forEach((a) => scheduledEmployeeIds.push(a.employee_id));
     }
 
+    // 清除護士的流動紀錄
+    // 如果他們之前是流動，現在被指派為固定了，必須把 nurse_float 刪掉
+    if (scheduledEmployeeIds.length > 0) {
+      console.log(
+        `🗑️ 清除 ${scheduledEmployeeIds.length} 位新任固定護士的流動紀錄...`
+      );
+      await client.query(
+        `DELETE FROM nurse_float WHERE employee_id = ANY($1)`,
+        [scheduledEmployeeIds]
+      );
+    }
+
     if (scheduledEmployeeIds.length > 0) {
       // 使用 Postgres 的 UPSERT (ON CONFLICT) 語法
       const updateHistoryQuery = `
@@ -812,7 +879,7 @@ router.post("/apply-float-schedule", requireNurse, async (req, res) => {
 
     const employeeIdsArray = Array.from(employeeIdsToUpdate);
 
-    // 2. 【關鍵修正】先刪除這些護士的舊流動紀錄
+    // 2. 先刪除這些護士的舊流動紀錄
     if (employeeIdsArray.length > 0) {
       console.log(
         `🗑️ 正在清除 ${employeeIdsArray.length} 位護士的舊流動紀錄...`
@@ -820,6 +887,40 @@ router.post("/apply-float-schedule", requireNurse, async (req, res) => {
       await client.query(
         `DELETE FROM nurse_float WHERE employee_id = ANY($1)`,
         [employeeIdsArray]
+      );
+
+      // 如果他們之前是固定護士，現在變成流動了，必須把 surgery_room_id 清空
+      console.log(
+        `🧹 清除 ${employeeIdsArray.length} 位護士的固定分配 (轉為流動)...`
+      );
+
+      // 轉換班別 (為了安全起見，確保只清當前時段)
+      const shiftMap = {
+        morning: "早班",
+        evening: "晚班",
+        night: "大夜班",
+      };
+      let schedulingTime = shift;
+      if (Object.keys(shiftMap).includes(shift)) {
+        schedulingTime = shiftMap[shift];
+      }
+
+      // 雙重確認：確保 schedulingTime 是有效的中文班別
+      const validShifts = ["早班", "晚班", "大夜班"];
+      if (!validShifts.includes(schedulingTime)) {
+        console.warn(
+          `⚠️ 警告: 班別名稱可能錯誤: ${shift} -> ${schedulingTime}`
+        );
+        // 可以在這裡做錯誤處理，或預設為 shift 原值
+      }
+
+      await client.query(
+        `
+        UPDATE nurse_schedule 
+        SET surgery_room_id = NULL
+        WHERE employee_id = ANY($1) AND scheduling_time = $2
+        `,
+        [employeeIdsArray, schedulingTime]
       );
     }
 
@@ -858,6 +959,19 @@ router.post("/apply-float-schedule", requireNurse, async (req, res) => {
       }
     }
 
+    // 更新 nurse_role_history (讓 total_float_count + 1)
+    if (employeeIdsArray.length > 0) {
+      console.log(`📊 更新 ${employeeIdsArray.length} 位流動護士的歷史計數...`);
+      const updateHistoryQuery = `
+        INSERT INTO nurse_role_history (employee_id, total_fixed_count, total_float_count)
+        SELECT unnest($1::text[]), 0, 1
+        ON CONFLICT (employee_id) 
+        DO UPDATE SET 
+            total_float_count = nurse_role_history.total_float_count + 1,
+            last_updated_at = CURRENT_TIMESTAMP
+      `;
+      await client.query(updateHistoryQuery, [employeeIdsArray]);
+    }
     await client.query("COMMIT");
 
     console.log(`✅ 成功插入 ${insertedCount} 筆流動護士記錄`);
@@ -960,7 +1074,7 @@ router.get("/float-schedule/:shift", requireNurse, async (req, res) => {
 
 /**
  * DELETE /api/nurse-schedules/clear-shift/:shift
- * 清除指定時段的所有排班資料（包含固定和流動）
+ * 強制重置：清除指定時段的排班，並將相關護士的歷史計數歸零
  */
 router.delete("/clear-shift/:shift", requireNurse, async (req, res) => {
   const client = await pool.connect();
@@ -986,7 +1100,8 @@ router.delete("/clear-shift/:shift", requireNurse, async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 步驟 1: 找出該科別該時段的所有護士
+    // 步驟 1: 找出該科別該時段的所有護士 ID
+    // 我們必須在刪除資料前先鎖定是哪些人
     const { rows: nurses } = await client.query(
       `
       SELECT ns.employee_id
@@ -1009,13 +1124,16 @@ router.delete("/clear-shift/:shift", requireNurse, async (req, res) => {
 
     const employeeIds = nurses.map((n) => n.employee_id);
 
-    // 步驟 2: 刪除流動護士記錄
+    console.log(`🧹 準備重置 ${employeeIds.length} 位護士的資料...`);
+
+    // 步驟 2: 刪除流動護士記錄 (nurse_float)
     const floatResult = await client.query(
       `DELETE FROM nurse_float WHERE employee_id = ANY($1)`,
       [employeeIds]
     );
 
-    // 步驟 3: 清除 nurse_schedule 的 surgery_room_id（保留基本排班資訊）
+    // 步驟 3: 清空固定排班分配 (nurse_schedule)
+    // 將 surgery_room_id 設為 NULL，但保留排班時段紀錄
     const scheduleResult = await client.query(
       `
       UPDATE nurse_schedule 
@@ -1026,24 +1144,39 @@ router.delete("/clear-shift/:shift", requireNurse, async (req, res) => {
       [employeeIds, schedulingTime]
     );
 
-    // 或者完全刪除 nurse_schedule 記錄（如果你希望重新開始）
-    // const scheduleResult = await client.query(
-    //   `DELETE FROM nurse_schedule WHERE employee_id = ANY($1) AND scheduling_time = $2`,
-    //   [employeeIds, schedulingTime]
-    // );
+    // 【🔥 新增步驟 4: 重置歷史紀錄 (nurse_role_history)】
+    // 將 total_fixed_count 和 total_float_count 歸零
+    // 或者您也可以選擇直接刪除：DELETE FROM nurse_role_history WHERE ...
+    const historyResult = await client.query(
+      `
+      UPDATE nurse_role_history 
+      SET total_fixed_count = 0, 
+          total_float_count = 0,
+          last_updated_at = CURRENT_TIMESTAMP
+      WHERE employee_id = ANY($1)
+      `,
+      [employeeIds]
+    );
+
+    // 若希望更徹底，連資料都刪除（下次排班會自動重建），可以使用：
+    // await client.query(`DELETE FROM nurse_role_history WHERE employee_id = ANY($1)`, [employeeIds]);
 
     await client.query("COMMIT");
 
     console.log(
-      `✅ 已清除 ${shift} 時段的排班資料: ${floatResult.rowCount} 筆流動記錄, ${scheduleResult.rowCount} 筆固定分配`
+      `✅ 重置完成: 
+       - 清除流動紀錄: ${floatResult.rowCount} 筆
+       - 重置固定分配: ${scheduleResult.rowCount} 筆
+       - 歷史計數歸零: ${historyResult.rowCount} 筆`
     );
 
     res.json({
       success: true,
-      message: `成功清除 ${shift} 時段的排班資料`,
+      message: `成功重置 ${shift} 時段排班與歷史紀錄`,
       data: {
         clearedFloatCount: floatResult.rowCount,
         clearedScheduleCount: scheduleResult.rowCount,
+        resetHistoryCount: historyResult.rowCount,
       },
     });
   } catch (error) {

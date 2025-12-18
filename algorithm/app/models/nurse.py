@@ -9,19 +9,22 @@ from typing import Optional, List
 
 
 class NurseInput(BaseModel):
-    """
-    護士輸入模型 - 用於接收 Node.js 傳來的護士資料
-    """
     employee_id: str = Field(..., description="護士員工編號")
     name: Optional[str] = Field(None, description="護士姓名")
-    room_type: str = Field(..., description="手術室類型 (RSU/RSP/RD/RE)")
-    scheduling_time: str = Field(..., description="排班時段 (早班/晚班/大夜)")
+    room_type: str = Field(..., description="手術室類型")
+    scheduling_time: str = Field(..., description="排班時段")
     
-    # 歷史資料 - 用於計算成本
+    # 【修正】對齊資料庫欄位名稱
     last_assigned_room: Optional[str] = Field(None, description="上次分配的手術室")
-    workload_this_week: Optional[int] = Field(0, description="本週已工作天數")
-    history_fixed_count: Optional[int] = Field(0, description="累計擔任固定角色的次數")
-    history_float_count: Optional[int] = Field(0, description="累計擔任流動角色的次數")
+    workload_this_week: int = Field(0, description="本週已工作天數")
+    
+    # 【關鍵修正】新增這兩個欄位，讓 Python 能接收到正確數值
+    total_fixed_count: int = Field(0, description="累計擔任固定角色的次數")
+    total_float_count: int = Field(0, description="累計擔任流動角色的次數")
+    
+    # 為了兼容舊程式碼，可以保留這些，但我們主要依賴上面兩個
+    history_fixed_count: Optional[int] = Field(0, description="舊欄位兼容")
+    history_float_count: Optional[int] = Field(0, description="舊欄位兼容")
     
     class Config:
         json_schema_extra = {

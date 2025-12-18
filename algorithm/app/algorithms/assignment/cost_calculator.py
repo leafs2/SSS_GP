@@ -40,27 +40,25 @@ class CostCalculator:
         nurse: NurseInput,
         room_id: str
     ) -> float:
-        """
-        計算熟悉度成本
-        
-        成本越低表示越熟悉
-        
-        Args:
-            nurse: 護士資料
-            room_id: 手術室編號
-            
-        Returns:
-            熟悉度成本 (0.0-10.0)
-        """
+        # 1. 完全匹配 (上次就在這間) -> 0.0
         if nurse.last_assigned_room == room_id:
-            # 上次就在這間手術室 - 最低成本
             return 0.0
-        elif nurse.last_assigned_room and nurse.last_assigned_room[:3] == room_id[:3]:
-            # 在同類型其他手術室工作過 - 中等成本
+            
+        # 2. 同類型匹配 (上次在同類型房間，或是流動護理師 NULL)
+        # 假設 room_id 前綴代表類型 (例如 "RSU01" 的前綴 "RSU")
+        # 或者我們可以直接判斷 nurse.room_type 是否符合
+        
+        # 這裡利用 user 的知識：只要能進來排班的，都是同類型
+        # 因此，如果是 NULL (流動)，給予中等成本 5.0，而不是完全陌生的 10.0
+        if nurse.last_assigned_room is None:
+            return 5.0 
+            
+        # 如果有上次房間，但不同間，檢查前綴是否相同
+        if nurse.last_assigned_room and nurse.last_assigned_room[:3] == room_id[:3]:
             return 5.0
-        else:
-            # 從未在此類型工作過 - 最高成本
-            return 10.0
+            
+        # 3. 完全不同類型 -> 10.0
+        return 10.0
     
     def calculate_workload_cost(
         self,
@@ -86,22 +84,21 @@ class CostCalculator:
         """
         target_role: 'fixed' (固定) 或 'float' (流動)
         """
-        # 讀取模型中的歷史數據
-        h_fixed = getattr(nurse, 'history_fixed_count', 0)
-        h_float = getattr(nurse, 'history_float_count', 0)
+        # 如果模型中只有 history_fixed_count，這裡可以用 getattr 嘗試兩種可能
+        h_fixed = getattr(nurse, 'total_fixed_count', getattr(nurse, 'history_fixed_count', 0))
+        h_float = getattr(nurse, 'total_float_count', getattr(nurse, 'history_float_count', 0))
+        
         total = h_fixed + h_float
         
-        # 防止除以零
         if total == 0:
             return 0.0
             
-        epsilon = 1e-6 # 避免浮點數誤差
+        epsilon = 1e-6
         
+        # 這裡邏輯不變
         if target_role == 'fixed':
-            # 如果這次要排固定，過去當過越多次固定，成本越高 (不公平)
             ratio = h_fixed / (total + epsilon)
-        else: # target_role == 'float'
-            # 如果這次要排流動，過去當過越多次流動，成本越高
+        else:
             ratio = h_float / (total + epsilon)
             
         return ratio * 10.0
@@ -147,16 +144,6 @@ class CostCalculator:
     ) -> Tuple[np.ndarray, Dict]:
         """
         創建成本矩陣
-        
-        將手術室需求「展開」成職位，建立 N×M 的成本矩陣
-        
-        Args:
-            nurses: 護士列表
-            rooms: 手術室列表
-            positions: 職位列表 [(room_id, position_number), ...]
-            
-        Returns:
-            (成本矩陣 numpy array, 成本明細字典)
         """
         n_nurses = len(nurses)
         n_positions = len(positions)
@@ -165,17 +152,14 @@ class CostCalculator:
         cost_matrix = np.zeros((n_nurses, n_positions))
         cost_details = {}
         
-        # 建立手術室查找字典
-        room_dict = {room.room_id: room for room in rooms}
-        
         # 計算每個護士到每個職位的成本
         for i, nurse in enumerate(nurses):
             for j, (room_id, position) in enumerate(positions):
-                room = room_dict[room_id]
                 
-                # 計算成本
                 total_cost, breakdown = self.calculate_total_cost(
-                    nurse, room, room_id
+                    nurse, 
+                    room_id,         # 傳入 ID 字串
+                    target_role='fixed' # 明確指定為固定護士排班
                 )
                 
                 cost_matrix[i, j] = total_cost

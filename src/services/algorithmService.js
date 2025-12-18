@@ -99,19 +99,36 @@ export const checkAlgorithmHealth = async () => {
  * @returns {Array} 格式化後的護士資料
  */
 export const formatNursesForAlgorithm = (nurses) => {
-  return nurses.map((nurse) => ({
-    employee_id: nurse.id,
-    name: nurse.name,
-    room_type: nurse.roomType || nurse.surgery_room_type,
-    scheduling_time: nurse.schedulingTime || nurse.scheduling_time,
-    last_assigned_room: nurse.lastAssignedRoom || nurse.surgery_room_id || null,
-    workload_this_week: nurse.workloadThisWeek || 0,
-    history_fixed_count:
-      nurse.historyFixedCount || nurse.history_fixed_count || 0,
-    history_float_count:
-      nurse.historyFloatCount || nurse.history_float_count || 0,
-    workload_this_week: nurse.workloadThisWeek || 0,
-  }));
+  return nurses.map((nurse) => {
+    console.log("原始護士資料欄位:", Object.keys(nurse));
+
+    return {
+      employee_id: nurse.employee_id || nurse.id, // 確保有吃到 ID
+      name: nurse.name,
+      room_type: nurse.room_type || nurse.roomType, // 兼容兩種命名
+      scheduling_time: nurse.scheduling_time || nurse.schedulingTime,
+
+      // 【修正 1】熟悉度：確保讀取 snake_case 欄位
+      last_assigned_room: nurse.last_assigned_room || null,
+
+      // 【修正 2】工作量：增加 snake_case 的檢查
+      workload_this_week:
+        nurse.workload_this_week || nurse.workloadThisWeek || 0,
+
+      // 【修正 3】公平性：確保傳遞 total_fixed_count
+      // 這裡非常重要！我们要傳給 Python 正確的 key
+      total_fixed_count:
+        nurse.total_fixed_count || nurse.historyFixedCount || 0,
+      total_float_count:
+        nurse.total_float_count || nurse.historyFloatCount || 0,
+
+      // 為了保險，保留舊欄位名稱以免 Python 端沒改到
+      history_fixed_count:
+        nurse.total_fixed_count || nurse.historyFixedCount || 0,
+      history_float_count:
+        nurse.total_float_count || nurse.historyFloatCount || 0,
+    };
+  });
 };
 
 /**
