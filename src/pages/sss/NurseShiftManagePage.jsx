@@ -19,15 +19,19 @@ import {
   CheckSquare,
   Square,
   Shuffle,
-  Lock
+  Lock,
+  ArrowRight,
+  CheckCircle2,
+  CalendarDays,
+  Clock
 } from 'lucide-react';
 import Layout from './components/Layout';
 import PageHeader from './components/PageHeader';
 import { useAuth } from '../../pages/login/AuthContext';
 import { useDepartmentNurses, saveBatchNurseSchedule, useShiftAssignments } from '../../hooks/useNurseSchedule';
 import { useSurgeryRoomTypes } from '../../hooks/useSurgeryRooms';
-import { assignNursesWithHungarian, checkAlgorithmHealth, formatNursesForAlgorithm, formatRoomsForAlgorithm } from '../../services/algorithmService';
-import api from '../../utils/api'; // 新增：引入 API 工具以便手動呼叫
+// 引入修改後的 Service 函式
+import { checkAlgorithmHealth, runAutoScheduleForShift } from '../../services/algorithmService';
 
 const NurseShiftManagePage = () => {
   const { user } = useAuth();
@@ -36,22 +40,25 @@ const NurseShiftManagePage = () => {
   // 當前選擇的時段
   const [selectedShift, setSelectedShift] = useState('morning');
   
-  // 新增：排班執行範圍 ('single' | 'all')
+  // 排班執行範圍 ('single' | 'all')
   const [scheduleScope, setScheduleScope] = useState('single');
+
+  // 追蹤連續排班的當前步驟 (null | 'morning' | 'evening' | 'night')
+  const [currentSequenceStep, setCurrentSequenceStep] = useState(null);
 
   // 使用真實 API 獲取科別護士列表（根據當前時段過濾）
   const { 
     nurses: availableNurses, 
     isLoading: nursesLoading, 
     error: nursesError 
-  } = useDepartmentNurses(selectedShift); // 傳入當前時段
+  } = useDepartmentNurses(selectedShift); 
 
   // 使用真實 API 獲取手術室類型和數量（根據時段）
   const { 
     roomTypes: surgeryRoomTypes, 
     isLoading: roomTypesLoading, 
     error: roomTypesError 
-  } = useSurgeryRoomTypes(selectedShift); // 傳入當前時段
+  } = useSurgeryRoomTypes(selectedShift); 
 
   // 載入當前時段的排班資料
   const {
@@ -69,9 +76,11 @@ const NurseShiftManagePage = () => {
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleError, setScheduleError] = useState(null);
+  
+  // 演算法結果狀態
   const [algorithmResults, setAlgorithmResults] = useState(null);
   
-  // 手術室類型和分配的護士
+  // 手術室類型和分配的護士 (前端本地狀態)
   const [roomTypeAssignments, setRoomTypeAssignments] = useState({
     morning: {},
     evening: {},
@@ -83,38 +92,29 @@ const NurseShiftManagePage = () => {
     if (surgeryRoomTypes && surgeryRoomTypes.length > 0) {
       setRoomTypeAssignments(prev => {
         const updated = { ...prev };
-        
-        // 只更新當前時段的資料
         if (!updated[selectedShift]) {
           updated[selectedShift] = {};
         }
-        
         surgeryRoomTypes.forEach(roomType => {
           if (!updated[selectedShift][roomType.type]) {
             updated[selectedShift][roomType.type] = [];
           }
         });
-        
         return updated;
       });
     }
   }, [surgeryRoomTypes, selectedShift]);
 
   // 當資料庫排班資料載入完成後，更新到對應的時段
+  // 這是保持前端資料與後端同步的關鍵
   useEffect(() => {
     if (savedAssignments && surgeryRoomTypes) {
       setRoomTypeAssignments(prev => {
         const updated = { ...prev };
-        
-        // 先清空當前時段的資料，避免混入其他時段資料
         updated[selectedShift] = {};
-        
-        // 初始化所有手術室類型
         surgeryRoomTypes.forEach(roomType => {
           updated[selectedShift][roomType.type] = [];
         });
-        
-        // 只有當 savedAssignments 有資料時才合併
         if (Object.keys(savedAssignments).length > 0) {
           Object.keys(savedAssignments).forEach(roomType => {
             if (savedAssignments[roomType] && Array.isArray(savedAssignments[roomType])) {
@@ -122,7 +122,6 @@ const NurseShiftManagePage = () => {
             }
           });
         }
-        
         return updated;
       });
     }
@@ -170,7 +169,6 @@ const NurseShiftManagePage = () => {
 
   // 檢查手術室是否可在當前時段操作
   const isRoomAvailableForShift = (roomType) => {
-    // 大夜班只能操作急診（RE）
     if (selectedShift === 'night') {
       return roomType === 'RE';
     }
@@ -204,8 +202,6 @@ const NurseShiftManagePage = () => {
     }
 
     const nursesToAdd = availableNurses.filter(n => selectedNurseIds.includes(n.id));
-    
-    // 判斷是否為急診手術房
     const isEmergencyRoom = selectedRoomType === 'RE';
     
     setRoomTypeAssignments(prev => ({
@@ -216,7 +212,6 @@ const NurseShiftManagePage = () => {
           ...prev[selectedShift][selectedRoomType],
           ...nursesToAdd.map(nurse => ({ 
             ...nurse, 
-            // 急診：空陣列；其他：預設週日(6)
             dayOff: isEmergencyRoom ? [] : [6]
           }))
         ]
@@ -313,524 +308,330 @@ const NurseShiftManagePage = () => {
       );
   };
 
-  // 一鍵輪班
-  const handleAutoSchedule = () => {
-    setShowScheduleModal(true);
-    setScheduleError(null);
-    setAlgorithmResults(null);
-  };
-
   // 關閉輪班彈窗
   const closeScheduleModal = () => {
     setShowScheduleModal(false);
     setScheduleError(null);
     setAlgorithmResults(null);
+    setCurrentSequenceStep(null);
   };
 
-  // 選項 1: 完整輪班（暫未實作）
-  const handleFullSchedule = () => {
-    alert('完整輪班功能開發中...\n此功能將包含：\n1. 跨週期輪班規劃\n2. 考慮休假歷史\n3. 公平性最佳化');
-    closeScheduleModal();
+  // --------------------------------------------------------
+  // 觸發排班流程 (Entry Point)
+  // --------------------------------------------------------
+  const handleAutoSchedule = () => {
+    setShowScheduleModal(true);
+    setScheduleError(null);
+    setAlgorithmResults(null);
+    setCurrentSequenceStep(null);
   };
 
-  // 選項 2: 使用現有資料進行排班（呼叫匈牙利演算法）
-  // 修正版：支援全時段排班
-  const handleQuickSchedule = async () => {
+  // 執行並顯示特定時段的結果 (使用 Service)
+  // 這裡我們依賴後端 Service 讀取資料庫中已經 "分類好" 的資料
+  const executeAndShowShift = async (shift) => {
     try {
+      // 呼叫 Service 層的函式 (該函式內部使用 fetch)
+      // 注意：這會基於資料庫中目前的 savedAssignments 進行運算
+      const response = await runAutoScheduleForShift(shift);
+      
+      if (!response.data || response.data.results.length === 0) {
+        throw new Error(`${getShiftInfo(shift).label} 沒有產生任何排班結果。請確認您是否已新增護士並點擊「儲存設定」。`);
+      }
+
+      setAlgorithmResults({
+        shift: shift, // 記錄這是哪個時段的結果
+        ...response.data // 展開 Service 回傳的 results, assignments, floatSchedules
+      });
+      setScheduleLoading(false);
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  // 處理一鍵輪班按鈕點擊
+  const handleQuickSchedule = async (scopeOverride) => {
+    try {
+      const effectiveScope = scopeOverride || scheduleScope;
+      
+      // 更新狀態以供後續步驟使用
+      if (scopeOverride) {
+        setScheduleScope(scopeOverride);
+      }
+
       setScheduleLoading(true);
       setScheduleError(null);
       setAlgorithmResults(null);
 
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-      const ALGORITHM_API_URL = import.meta.env.VITE_ALGORITHM_API_URL || 'http://localhost:8000';
-
-      // 檢查演算法服務
+      // 檢查服務狀態
       const healthCheck = await checkAlgorithmHealth();
-      if (!healthCheck.healthy) {
-        throw new Error('演算法服務未啟動');
-      }
+      if (!healthCheck.healthy) throw new Error('演算法服務未啟動');
+      if (!surgeryRoomTypes || surgeryRoomTypes.length === 0) throw new Error('無法取得手術室類型資訊');
 
-      if (!surgeryRoomTypes || surgeryRoomTypes.length === 0) {
-        throw new Error('無法取得手術室類型資訊');
-      }
-
-      // 1. 定義要執行的時段
-      const shiftsToProcess = scheduleScope === 'all' 
-        ? ['morning', 'evening', 'night'] 
-        : [selectedShift];
-
-      const aggregatedResults = {};
-
-      console.group('🚀 開始排班流程');
-      console.log('執行範圍:', scheduleScope === 'all' ? '全時段' : `單一時段 (${selectedShift})`);
-
-      // 2. 針對每個時段執行迴圈
-      for (const currentShift of shiftsToProcess) {
-        const shiftMap = { 'morning': '早班', 'evening': '晚班', 'night': '大夜班' };
-        const shiftName = shiftMap[currentShift];
-        
-        console.log(`\n=== 正在處理時段: ${shiftName} ===`);
-
-        // A. 手動抓取該時段的資料 (不依賴 Hook)
-        // 抓取可用護士
-        const nursesRes = await api.get('/nurse-schedules/department-nurses', {
-          params: { shift: currentShift }
-        });
-        const rawNurses = nursesRes.data.data || [];
-
-        // 抓取現有排班 (包含已經設定在該時段的護士)
-        const assignmentsRes = await api.get(`/nurse-schedules/shift-assignments/${currentShift}`);
-        const currentShiftAssignments = assignmentsRes.data.data || {};
-
-        const shiftResults = [];
-        const shiftAssignments = {};
-        const shiftFloatSchedules = {};
-
-        // B. 對每個手術室類型執行排班
-        for (const roomTypeData of surgeryRoomTypes) {
-          const roomType = roomTypeData.type;
-          
-          // 合併護士名單：(未排班護士) + (該時段已在該類型排班的護士)
-          // 這樣才能讓演算法重新分配該類型的人員
-          const assignedInThisType = currentShiftAssignments[roomType] || [];
-          
-          // 這裡我們需要一個完整的候選名單，包含"還沒排班的人"和"已經在這個位置的人"
-          // 注意：rawNurses API 回傳的是「未在其他時段排班且未在當前時段排班」的人
-          // 所以直接合併是安全的
-          const nursesForAlgoRaw = [
-            ...rawNurses,
-            ...assignedInThisType
-          ];
-
-          // 簡單過濾掉重複 ID (防呆)
-          const uniqueNursesMap = new Map();
-          nursesForAlgoRaw.forEach(n => uniqueNursesMap.set(n.id || n.employee_id, n));
-          const uniqueNurses = Array.from(uniqueNursesMap.values());
-
-          if (uniqueNurses.length === 0) {
-            console.log(`⚠️ ${roomType} 沒有可用護士，跳過`);
-            continue;
-          }
-
-          // C. 獲取手術室列表並過濾
-          const dbShiftMapping = {
-            'morning': 'morning_shift',
-            'evening': 'night_shift',
-            'night': 'graveyard_shift'
-          };
-          const dbShift = dbShiftMapping[currentShift];
-
-          const roomsResponse = await fetch(
-            `${API_URL}/api/surgery-rooms/type/${encodeURIComponent(roomType)}?shift=${dbShift}`,
-            {
-              method: 'GET',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' }
-            }
-          );
-
-          if (!roomsResponse.ok) continue;
-
-          const roomsData = await roomsResponse.json();
-          const allRooms = roomsData.data || [];
-
-          // 過濾該時段開放的手術室
-          const shiftFieldMapping = {
-            'morning': 'morningShift',
-            'evening': 'nightShift',
-            'night': 'graveyardShift'
-          };
-          const shiftField = shiftFieldMapping[currentShift];
-          const rooms = allRooms.filter(room => room[shiftField] === true || room[shiftField] === 1);
-
-          if (rooms.length === 0) {
-            continue;
-          }
-
-          // D. 執行匈牙利演算法（固定護士分配）
-          const formattedNurses = formatNursesForAlgorithm(
-            uniqueNurses.map(n => ({
-              ...n,
-              roomType: roomType,
-              schedulingTime: shiftName,
-              // 確保欄位名稱正確
-              id: n.id || n.employee_id,
-              total_fixed_count: n.total_fixed_count || n.history_fixed_count || 0,
-              total_float_count: n.total_float_count || n.history_float_count || 0,
-              workload_this_week: n.workload_this_week || 0,
-              last_assigned_room: n.last_assigned_room || null
-            }))
-          );
-
-          const formattedRooms = formatRoomsForAlgorithm(rooms, roomType, currentShift);
-
-          const hungarianResult = await assignNursesWithHungarian({
-            shift: shiftName,
-            roomType: roomType,
-            nurses: formattedNurses,
-            rooms: formattedRooms,
-            config: {
-              cost_weights: {
-                familiarity: 0.4,
-                workload: 0.3,
-                role_fairness: 0.3 
-              }
-            }
-          });
-
-          if (!hungarianResult.success) {
-            console.error(`${roomType} 固定護士分配失敗: ${hungarianResult.error}`);
-            continue;
-          }
-
-          const fixedAssignments = hungarianResult.data.assignments;
-          shiftResults.push({
-            roomType: roomType,
-            result: hungarianResult.data
-          });
-
-          // E. 識別流動護士
-          const assignedNurseIds = new Set(fixedAssignments.map(a => a.employee_id));
-          
-          // 從 uniqueNurses 中找出沒被分配到的
-          const floatNurses = uniqueNurses
-            .filter(n => !assignedNurseIds.has(n.id || n.employee_id))
-            .map(n => ({
-              employee_id: n.id || n.employee_id,
-              name: n.name,
-              day_off: n.dayOff || (n.day_off_ids ? n.day_off_ids.map(d=>d-1) : []) || []
-            }));
-
-          if (floatNurses.length === 0) {
-            shiftAssignments[roomType] = fixedAssignments;
-            continue;
-          }
-
-          // F. 準備固定護士資料（用於計算空缺）
-          const fixedAssignmentsByRoom = {};
-          fixedAssignments.forEach(assignment => {
-            const roomId = assignment.assigned_room;
-            if (!fixedAssignmentsByRoom[roomId]) fixedAssignmentsByRoom[roomId] = [];
-            
-            // 找出該護士的休假 (需要從原始資料找)
-            const originalNurse = uniqueNurses.find(n => (n.id || n.employee_id) === assignment.employee_id);
-            fixedAssignmentsByRoom[roomId].push({
-              employee_id: assignment.employee_id,
-              day_off: originalNurse?.dayOff || (originalNurse?.day_off_ids ? originalNurse.day_off_ids.map(d=>d-1) : []) || []
-            });
-          });
-
-          const roomRequirements = {};
-          rooms.forEach(room => {
-            const nurseField = {
-              'morning': 'morning_shift_nurses',
-              'evening': 'night_shift_nurses',
-              'night': 'graveyard_shift_nurses'
-            }[currentShift];
-            roomRequirements[room.id] = parseInt(room[nurseField] || room.nurse_count || room.nurseCount || 3);
-          });
-
-          // G. 呼叫流動護士排班 API
-          const floatScheduleResponse = await fetch(
-            `${ALGORITHM_API_URL}/api/assignment/float-nurse-schedule`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                shift: shiftName,
-                room_type: roomType,
-                float_nurses: floatNurses,
-                fixed_assignments: fixedAssignmentsByRoom,
-                room_requirements: roomRequirements,
-                config: { strategy: 'balanced' }
-              })
-            }
-          );
-
-          if (floatScheduleResponse.ok) {
-            const floatScheduleData = await floatScheduleResponse.json();
-            shiftFloatSchedules[roomType] = floatScheduleData;
-          }
-
-          shiftAssignments[roomType] = fixedAssignments;
-        } // End of room type loop
-
-        // 儲存該時段的結果
-        aggregatedResults[currentShift] = {
-          results: shiftResults,
-          assignments: shiftAssignments,
-          floatSchedules: shiftFloatSchedules
-        };
-
-      } // End of shift loop
-
-      console.groupEnd();
-
-      // 3. 根據範圍設定結果狀態
-      if (scheduleScope === 'single') {
-        // 單一時段：保持原有的資料結構，不影響現有顯示
-        const currentRes = aggregatedResults[selectedShift];
-        if (!currentRes || currentRes.results.length === 0) {
-          throw new Error('沒有產生任何排班結果');
-        }
-        setAlgorithmResults(currentRes);
+      if (effectiveScope === 'single') {
+        // 單一時段模式：只處理當前選擇的時段
+        await executeAndShowShift(selectedShift);
       } else {
-        // 全時段：儲存完整物件
-        setAlgorithmResults({
-          isAllShifts: true, // 標記這是全時段結果
-          data: aggregatedResults
-        });
+        // 全時段模式：從早班開始
+        setCurrentSequenceStep('morning');
+        await executeAndShowShift('morning');
       }
-
-      alert(`✅ 排班計算完成！`);
 
     } catch (error) {
       console.error('❌ 排班失敗:', error);
       setScheduleError(error.message);
-    } finally {
       setScheduleLoading(false);
     }
   };
 
-  // 應用完整排班結果到資料庫
+  // --------------------------------------------------------
+  // 應用結果並 (可能) 進入下一階段
+  // --------------------------------------------------------
   const handleApplyAlgorithmResults = async () => {
     if (!algorithmResults) return;
 
     try {
       setScheduleLoading(true);
 
-      // 定義要寫入的資料列表
-      const tasks = [];
+      const currentShift = algorithmResults.shift;
+      const shiftMapping = { 'morning': '早班', 'evening': '晚班', 'night': '大夜班' };
+      const shiftName = shiftMapping[currentShift];
 
-      if (algorithmResults.isAllShifts) {
-        // 全時段模式
-        Object.entries(algorithmResults.data).forEach(([shiftKey, data]) => {
-          tasks.push({ shift: shiftKey, data: data });
-        });
+      console.log(`正在寫入 ${shiftName} 資料...`);
+
+      // 1. 寫入資料庫
+      const { assignments, floatSchedules } = algorithmResults;
+
+      // 使用 fetch 呼叫後端 API
+      if (assignments && Object.keys(assignments).length > 0) {
+        const fixedResponse = await fetch(
+          `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'}/api/nurse-schedules/apply-algorithm-results`,
+          {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ shift: shiftName, assignments: assignments })
+          }
+        );
+        if (!fixedResponse.ok) throw new Error(`${shiftName} 更新固定護士失敗`);
+      }
+
+      if (floatSchedules && Object.keys(floatSchedules).length > 0) {
+        const floatResponse = await fetch(
+          `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'}/api/nurse-schedules/apply-float-schedule`,
+          {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ shift: shiftName, floatSchedules: floatSchedules })
+          }
+        );
+        if (!floatResponse.ok) throw new Error(`${shiftName} 更新流動護士失敗`);
+      }
+
+      // 2. 決定下一步
+      if (scheduleScope === 'all') {
+        if (currentSequenceStep === 'morning') {
+          // 準備進入晚班
+          setCurrentSequenceStep('evening');
+          await executeAndShowShift('evening');
+        } else if (currentSequenceStep === 'evening') {
+          // 準備進入大夜班
+          setCurrentSequenceStep('night');
+          await executeAndShowShift('night');
+        } else {
+          // 全部完成
+          alert('🎉 全時段排班順利完成！');
+          closeScheduleModal();
+          refetchAssignments();
+        }
       } else {
-        // 單一時段模式
-        tasks.push({ shift: selectedShift, data: algorithmResults });
+        // 單一時段完成
+        alert(`✅ ${shiftName} 排班更新完成！`);
+        closeScheduleModal();
+        refetchAssignments();
       }
-
-      const shiftMapping = {
-        'morning': '早班',
-        'evening': '晚班',
-        'night': '大夜班' // 修正後端需要的格式
-      };
-
-      // 依序寫入每個時段
-      for (const task of tasks) {
-        const shiftName = shiftMapping[task.shift];
-        const { assignments, floatSchedules } = task.data;
-
-        console.log(`正在寫入 ${shiftName} 資料...`);
-
-        // 步驟 1: 更新固定護士分配
-        if (assignments && Object.keys(assignments).length > 0) {
-          const fixedResponse = await fetch(
-            `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'}/api/nurse-schedules/apply-algorithm-results`,
-            {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                shift: shiftName,
-                assignments: assignments
-              })
-            }
-          );
-          if (!fixedResponse.ok) throw new Error(`${shiftName} 更新固定護士失敗`);
-        }
-
-        // 步驟 2: 更新流動護士排班
-        if (floatSchedules && Object.keys(floatSchedules).length > 0) {
-          const floatResponse = await fetch(
-            `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'}/api/nurse-schedules/apply-float-schedule`,
-            {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                shift: shiftName,
-                floatSchedules: floatSchedules
-              })
-            }
-          );
-          if (!floatResponse.ok) throw new Error(`${shiftName} 更新流動護士失敗`);
-        }
-      }
-
-      alert(`✅ 成功更新資料庫！`);
-      
-      refetchAssignments();
-      closeScheduleModal();
 
     } catch (error) {
       console.error('更新資料庫失敗:', error);
       setScheduleError(error.message);
-    } finally {
       setScheduleLoading(false);
     }
   };
 
-  // 渲染單一時段結果的組件 (提取出來以便重複使用)
-  const RenderSingleShiftResult = ({ results, floatSchedules, shiftLabel }) => (
+  // 渲染單一時段結果的組件
+  const RenderSingleShiftResult = ({ results, floatSchedules, shiftLabel, nurseNameMap }) => (
     <div className="space-y-4">
-      {results.map(({ roomType, result }) => (
-        <div key={roomType} className="bg-white rounded-lg p-4 border border-green-200">
-          {/* 手術室類型標題 */}
-          <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-200">
-            <div className="flex items-center gap-2">
-              <Building2 className="w-5 h-5 text-blue-600" />
-              <h4 className="font-bold text-gray-800 text-base">{roomType}</h4>
-              <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded font-medium">
-                {shiftLabel}
-              </span>
+      {results.map(({ roomType, result }) => {
+        return (
+          <div key={roomType} className="bg-white rounded-lg p-4 border border-green-200">
+            {/* 標題列 */}
+            <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-200">
+              <div className="flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-blue-600" />
+                <h4 className="font-bold text-gray-800 text-base">{roomType}</h4>
+                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded font-medium">
+                  {shiftLabel}
+                </span>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-gray-500">
+                <span>總成本: {result.total_cost.toFixed(2)}</span>
+                <span className={result.metadata.optimal_solution ? 'text-green-600 font-medium' : 'text-amber-600 font-medium'}>
+                  {result.metadata.optimal_solution ? '✓ 最佳解' : '⚠ 次佳解'}
+                </span>
+              </div>
             </div>
-            <div className="flex items-center gap-3 text-xs text-gray-500">
-              <span>總成本: {result.total_cost.toFixed(2)}</span>
-              <span className={result.metadata.optimal_solution ? 'text-green-600 font-medium' : 'text-amber-600 font-medium'}>
-                {result.metadata.optimal_solution ? '✓ 最佳解' : '⚠ 次佳解'}
-              </span>
-            </div>
-          </div>
 
-          {/* 統計摘要 */}
-          <div className="grid grid-cols-3 gap-3 mb-3">
-            <div className="bg-blue-50 rounded p-2">
-              <p className="text-xs text-gray-600">固定護士</p>
-              <p className="text-lg font-bold text-blue-700">
-                {result.assignments.filter(a => a.assigned_room).length}
-              </p>
+            {/* 統計數據 */}
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div className="bg-blue-50 rounded p-2">
+                <p className="text-xs text-gray-600">固定護士</p>
+                <p className="text-lg font-bold text-blue-700">
+                  {result.assignments.filter(a => a.assigned_room).length}
+                </p>
+              </div>
+              <div className="bg-purple-50 rounded p-2">
+                <p className="text-xs text-gray-600">流動護士</p>
+                <p className="text-lg font-bold text-purple-700">
+                  {floatSchedules?.[roomType]?.summary?.total_float_nurses || 0}
+                </p>
+              </div>
+              <div className="bg-gray-50 rounded p-2">
+                <p className="text-xs text-gray-600">手術室數</p>
+                <p className="text-lg font-bold text-gray-700">
+                  {Object.keys(result.room_assignments).length}
+                </p>
+              </div>
             </div>
-            <div className="bg-purple-50 rounded p-2">
-              <p className="text-xs text-gray-600">流動護士</p>
-              <p className="text-lg font-bold text-purple-700">
-                {floatSchedules?.[roomType]?.summary?.total_float_nurses || 0}
-              </p>
-            </div>
-            <div className="bg-gray-50 rounded p-2">
-              <p className="text-xs text-gray-600">手術室數</p>
-              <p className="text-lg font-bold text-gray-700">
-                {Object.keys(result.room_assignments).length}
-              </p>
-            </div>
-          </div>
 
-          {/* 手術室分配詳情 */}
-          <div className="space-y-2">
-            <p className="text-xs font-medium text-gray-600 mb-2">手術室分配詳情：</p>
-            {Object.entries(result.room_assignments).map(([roomId, summary]) => (
-              <div key={roomId} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-gray-800">{roomId}</span>
-                    <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded">
-                      {summary.nurses.length} 位護士
-                    </span>
+            {/* 手術室分配詳情 (固定分配) */}
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-gray-600 mb-2">手術室分配詳情：</p>
+              {Object.entries(result.room_assignments)
+                // ★ 修正：加入手術室 ID 排序
+                .sort(([roomIdA], [roomIdB]) => 
+                  roomIdA.localeCompare(roomIdB, undefined, { numeric: true })
+                )
+                .map(([roomId, summary]) => (
+                  <div key={roomId} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-gray-800">{roomId}</span>
+                        <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded">
+                          {summary.nurses.length} 位護士
+                        </span>
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        總成本: {summary.total_cost?.toFixed(2) || '0.00'}
+                      </span>
+                    </div>
+                    
+                    {/* 該房間的護士列表 */}
+                    <div className="space-y-1.5 mt-2">
+                      {summary.nurses.map((nurseId, idx) => {
+                        const fullAssignment = result.assignments.find(
+                          a => a.employee_id === nurseId && a.assigned_room === roomId
+                        );
+                        
+                        // 使用 nurseNameMap 反查名字
+                        const nurseName = nurseNameMap?.[nurseId] || fullAssignment?.nurse_name || '未知';
+
+                        return (
+                          <div key={idx} className="flex items-center justify-between bg-white rounded px-3 py-2 border border-gray-200">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-gray-800">
+                                {nurseName}
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                ({nurseId})
+                              </span>
+                              {fullAssignment?.position && (
+                                <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded">
+                                  位置 {fullAssignment.position}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-gray-500">
+                              {fullAssignment && (
+                                <span>成本: {fullAssignment.cost?.toFixed(2) || '0.00'}</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <span className="text-xs text-gray-500">
-                    總成本: {summary.total_cost?.toFixed(2) || '0.00'}
-                  </span>
-                </div>
-                
-                {/* 護士列表 */}
-                <div className="space-y-1.5 mt-2">
-                  {summary.nurses.map((nurse, idx) => {
-                    const fullAssignment = result.assignments.find(
-                      a => a.employee_id === nurse && a.assigned_room === roomId
-                    );
-                    const nurseName = fullAssignment?.nurse_name || '未知';
-                    return (
-                      <div key={idx} className="flex items-center justify-between bg-white rounded px-3 py-2 border border-gray-200">
-                        <div className="flex items-center gap-3">
-                          <span className="text-sm font-medium text-gray-800">
-                            {nurseName}
-                          </span>
-                          <span className="text-xs text-gray-500">
-                            ({nurse || fullAssignment?.employee_id})
-                          </span>
-                          {fullAssignment?.position && (
-                            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded">
-                              位置 {fullAssignment.position}
+              ))}
+            </div>
+
+            {/* 流動護士分配詳情 */}
+            {floatSchedules && floatSchedules[roomType] && (
+              <div className="mt-3 pt-3 border-t border-gray-200">
+                <p className="text-xs font-medium text-purple-600 mb-2 flex items-center gap-1">
+                  <Shuffle className="w-3 h-3" />
+                  流動護士排班詳情：
+                </p>
+                <div className="bg-purple-50 rounded-lg p-3 border border-purple-200">
+                  <div className="grid grid-cols-2 gap-2 text-xs mb-2 text-left">
+                    <div>
+                      <span className="text-gray-600">流動護士數：</span>
+                      <span className="font-medium text-purple-700 ml-1">
+                        {floatSchedules[roomType].summary?.total_float_nurses || 0}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  {floatSchedules[roomType].schedule && floatSchedules[roomType].schedule.length > 0 && (
+                    <div className="space-y-1.5 mt-2">
+                      {floatSchedules[roomType].schedule.map((floatNurse, idx) => {
+                        const workDays = ['mon', 'tues', 'wed', 'thu', 'fri', 'sat', 'sun'].filter(
+                          day => floatNurse[day] && floatNurse[day] !== null
+                        ).length;
+
+                        // 使用 nurseNameMap 反查流動護士名字
+                        const nurseName = nurseNameMap?.[floatNurse.employee_id] || floatNurse.nurse_name || '未知';
+
+                        return (    
+                        <div key={idx} className="bg-white rounded px-3 py-2 border border-purple-200">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm font-medium text-purple-800">
+                              {nurseName}
                             </span>
-                          )}
+                            <span className="text-xs text-purple-600 ml-2">
+                              ({floatNurse.employee_id})
+                            </span>
+                            <span className="text-xs text-purple-600 ml-auto">
+                              工作 {workDays} 天
+                            </span>
+                          </div>
+                          <div className="flex gap-1 text-xs">
+                            {['mon', 'tues', 'wed', 'thu', 'fri', 'sat', 'sun'].map((day, dayIdx) => {
+                              const room = floatNurse[day];
+                              const dayLabel = ['一', '二', '三', '四', '五', '六', '日'][dayIdx];
+                              return (
+                                <div 
+                                  key={day} 
+                                  className={`flex-1 text-center py-1 rounded ${
+                                    room 
+                                      ? 'bg-purple-100 text-purple-700 font-medium' 
+                                      : 'bg-gray-100 text-gray-400'
+                                  }`}
+                                >
+                                  <div>{dayLabel}</div>
+                                  <div className="text-xs">{room || '-'}</div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
-                        <div className="flex items-center gap-3 text-xs text-gray-500">
-                          {fullAssignment && (
-                            <span>成本: {fullAssignment.cost?.toFixed(2) || '0.00'}</span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                    )})}
+                    </div>
+                  )}
                 </div>
               </div>
-            ))}
+            )}
           </div>
-
-          {/* 流動護士分配詳情 */}
-          {floatSchedules && floatSchedules[roomType] && (
-            <div className="mt-3 pt-3 border-t border-gray-200">
-              <p className="text-xs font-medium text-purple-600 mb-2 flex items-center gap-1">
-                <Shuffle className="w-3 h-3" />
-                流動護士排班詳情：
-              </p>
-              <div className="bg-purple-50 rounded-lg p-3 border border-purple-200">
-                <div className="grid grid-cols-2 gap-2 text-xs mb-2">
-                  <div>
-                    <span className="text-gray-600">流動護士數：</span>
-                    <span className="font-medium text-purple-700 ml-1">
-                      {floatSchedules[roomType].summary?.total_float_nurses || 0}
-                    </span>
-                  </div>
-                </div>
-                
-                {floatSchedules[roomType].schedule && floatSchedules[roomType].schedule.length > 0 && (
-                  <div className="space-y-1.5 mt-2">
-                    {floatSchedules[roomType].schedule.map((floatNurse, idx) => {
-                      const workDays = ['mon', 'tues', 'wed', 'thu', 'fri', 'sat', 'sun'].filter(
-                        day => floatNurse[day] && floatNurse[day] !== null
-                      ).length;
-
-                      return (    
-                      <div key={idx} className="bg-white rounded px-3 py-2 border border-purple-200">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-sm font-medium text-purple-800">
-                            {floatNurse.name || floatNurse.employee_id}
-                          </span>
-                          <span className="text-xs text-purple-600">
-                            工作 {workDays} 天
-                          </span>
-                        </div>
-                        <div className="flex gap-1 text-xs">
-                          {['mon', 'tues', 'wed', 'thu', 'fri', 'sat', 'sun'].map((day, dayIdx) => {
-                            const room = floatNurse[day];
-                            const dayLabel = ['一', '二', '三', '四', '五', '六', '日'][dayIdx];
-                            return (
-                              <div 
-                                key={day} 
-                                className={`flex-1 text-center py-1 rounded ${
-                                  room 
-                                    ? 'bg-purple-100 text-purple-700 font-medium' 
-                                    : 'bg-gray-100 text-gray-400'
-                                }`}
-                              >
-                                <div>{dayLabel}</div>
-                                <div className="text-xs">{room || '-'}</div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                  )})}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 
@@ -1186,30 +987,12 @@ const NurseShiftManagePage = () => {
               )}
             </div>
           </div>
-
-          {/* 提示訊息 */}
-          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-3">
-            <Info className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <p className="text-sm text-blue-800 font-medium">
-                排班輪值管理說明
-              </p>
-              <p className="text-xs text-blue-600 mt-1">
-                1. 選擇時段（早班 25間 / 晚班 14間 / 大夜班 3間急診）<br />
-                2. 為每個手術室類型新增護士<br />
-                3. 設定每位護士的休假日（每週兩天）<br />
-                4. 點擊「一鍵輪班」自動分配護士到特定手術室<br />
-                5. 大夜班僅開放急診手術室（RE）排班
-              </p>
-            </div>
-          </div>
         </main>
 
         {/* 新增護士模態框 */}
         {showAddNurseModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
-              {/* 模態框標題 */}
               <div className="flex items-center justify-between p-4 border-b border-gray-200">
                 <div>
                   <h3 className="text-lg font-bold text-gray-800">
@@ -1229,7 +1012,6 @@ const NurseShiftManagePage = () => {
                 </button>
               </div>
 
-              {/* 搜尋列和全選按鈕 */}
               <div className="p-4 border-b border-gray-200 space-y-3">
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -1262,7 +1044,6 @@ const NurseShiftManagePage = () => {
                 )}
               </div>
 
-              {/* 護士列表 */}
               <div className="flex-1 overflow-y-auto p-4">
                 {nursesLoading ? (
                   <div className="text-center py-12">
@@ -1290,7 +1071,6 @@ const NurseShiftManagePage = () => {
                               : 'border-gray-200 hover:bg-gray-50 hover:border-gray-300'
                           }`}
                         >
-                          {/* 勾選框 */}
                           <div className="flex-shrink-0">
                             {isSelected ? (
                               <CheckSquare className="w-5 h-5 text-blue-600" />
@@ -1298,8 +1078,6 @@ const NurseShiftManagePage = () => {
                               <Square className="w-5 h-5 text-gray-400" />
                             )}
                           </div>
-                          
-                          {/* 護士資訊 */}
                           <div className="flex-1">
                             <p className={`font-medium ${
                               isSelected ? 'text-blue-900' : 'text-gray-800'
@@ -1324,7 +1102,6 @@ const NurseShiftManagePage = () => {
                 )}
               </div>
 
-              {/* 底部按鈕 */}
               <div className="flex items-center justify-between gap-3 p-4 border-t border-gray-200 bg-gray-50">
                 <button
                   onClick={closeAddNurseModal}
@@ -1355,7 +1132,9 @@ const NurseShiftManagePage = () => {
                     一鍵輪班
                   </h3>
                   <p className="text-sm text-gray-600 mt-1">
-                    {currentShiftInfo.label} · 選擇排班方式
+                    {scheduleScope === 'all' 
+                      ? '全時段排班模式' 
+                      : `${currentShiftInfo.label} · 單一時段排班`}
                   </p>
                 </div>
                 <button
@@ -1380,7 +1159,7 @@ const NurseShiftManagePage = () => {
                   </div>
                 )}
 
-                {/* 演算法結果 */}
+                {/* 演算法結果顯示區 */}
                 {algorithmResults && (
                   <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
                     <div className="flex items-start gap-3 mb-4">
@@ -1388,45 +1167,38 @@ const NurseShiftManagePage = () => {
                       <div className="flex-1">
                         <p className="text-sm text-green-800 font-medium">演算法執行成功</p>
                         <p className="text-xs text-green-600 mt-1">
-                          {algorithmResults.isAllShifts 
-                            ? '已完成所有時段（早、晚、大夜）的排班計算'
-                            : `${currentShiftInfo.label} - 共處理 ${algorithmResults.results.length} 個手術室類型`
-                          }
+                          目前顯示: {getShiftInfo(algorithmResults.shift).label} ({algorithmResults.results.length} 個類型)
                         </p>
+                        {scheduleScope === 'all' && (
+                          <div className="flex items-center gap-2 mt-2 text-xs">
+                            {['morning', 'evening', 'night'].map((step, idx) => {
+                              const stepInfo = getShiftInfo(step);
+                              const isCompleted = 
+                                (step === 'morning' && currentSequenceStep !== 'morning') ||
+                                (step === 'evening' && currentSequenceStep === 'night');
+                              const isCurrent = currentSequenceStep === step;
+
+                              return (
+                                <div key={step} className={`flex items-center ${isCurrent ? 'font-bold text-blue-600' : 'text-gray-500'}`}>
+                                  {isCompleted ? <CheckCircle2 className="w-3 h-3 mr-1 text-green-500" /> : <span className="mr-1">{idx + 1}.</span>}
+                                  {stepInfo.label}
+                                  {step !== 'night' && <ArrowRight className="w-3 h-3 mx-1 text-gray-300" />}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
 
                     {/* 詳細結果 */}
                     <div className="space-y-4 mt-4 max-h-[60vh] overflow-y-auto">
-                      {algorithmResults.isAllShifts ? (
-                        // 全時段顯示模式
-                        ['morning', 'evening', 'night'].map(shiftKey => {
-                          const shiftData = algorithmResults.data[shiftKey];
-                          const shiftMap = { morning: '早班', evening: '晚班', night: '大夜班' };
-                          
-                          if (!shiftData || !shiftData.results || shiftData.results.length === 0) return null;
-
-                          return (
-                            <div key={shiftKey} className="border-t pt-4 mt-4 first:mt-0 first:border-t-0 first:pt-0">
-                              <h4 className="font-bold text-gray-700 mb-3 bg-gray-100 px-3 py-1.5 rounded inline-block">
-                                {shiftMap[shiftKey]}結果
-                              </h4>
-                              <RenderSingleShiftResult 
-                                results={shiftData.results} 
-                                floatSchedules={shiftData.floatSchedules}
-                                shiftLabel={shiftMap[shiftKey]}
-                              />
-                            </div>
-                          );
-                        })
-                      ) : (
-                        // 單一時段顯示模式 (維持原有設計)
                         <RenderSingleShiftResult 
                           results={algorithmResults.results} 
                           floatSchedules={algorithmResults.floatSchedules}
-                          shiftLabel={currentShiftInfo.label}
+                          shiftLabel={getShiftInfo(algorithmResults.shift).label}
+                          nurseNameMap={algorithmResults.nurseNameMap}
                         />
-                      )}
                     </div>
 
                     {/* 應用結果按鈕 */}
@@ -1438,12 +1210,17 @@ const NurseShiftManagePage = () => {
                       {scheduleLoading ? (
                         <>
                           <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                          更新中...
+                          處理中...
                         </>
                       ) : (
                         <>
                           <Save className="w-4 h-4" />
-                          應用此分配結果到資料庫
+                          {scheduleScope === 'all' 
+                            ? (currentSequenceStep === 'night' 
+                                ? '應用並完成排班' 
+                                : `應用並繼續處理${currentSequenceStep === 'morning' ? '晚班' : '大夜班'}`)
+                            : '應用此分配結果到資料庫'
+                          }
                         </>
                       )}
                     </button>
@@ -1453,118 +1230,45 @@ const NurseShiftManagePage = () => {
                 {/* 選項卡片 */}
                 {!algorithmResults && (
                   <div className="space-y-4">
-                    {/* 新增：執行範圍選擇 */}
-                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-4">
-                      <h3 className="text-sm font-medium text-gray-700 mb-3">執行範圍</h3>
-                      <div className="flex gap-4">
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="radio"
-                            name="scope"
-                            value="single"
-                            checked={scheduleScope === 'single'}
-                            onChange={(e) => setScheduleScope(e.target.value)}
-                            className="text-blue-600 focus:ring-blue-500"
-                          />
-                          <span className="text-sm text-gray-700">僅目前時段 ({currentShiftInfo.label})</span>
-                        </label>
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="radio"
-                            name="scope"
-                            value="all"
-                            checked={scheduleScope === 'all'}
-                            onChange={(e) => setScheduleScope(e.target.value)}
-                            className="text-blue-600 focus:ring-blue-500"
-                          />
-                          <span className="text-sm text-gray-700">全時段 (早/晚/大夜)</span>
-                        </label>
-                      </div>
+                    {/* 兩大操作按鈕 */}
+                    <div className="grid grid-cols-1 gap-4">
+                      {/* 選項 1: 僅目前時段 */}
+                      <button
+                        onClick={() => handleQuickSchedule('single')}
+                        disabled={scheduleLoading}
+                        className="flex flex-col items-center justify-center p-6 border-2 border-gray-200 rounded-lg hover:border-blue-400 hover:bg-gray-50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Clock className="w-8 h-8 text-gray-400 group-hover:text-blue-500 mb-3 transition-colors" />
+                        <span className="text-lg font-bold text-gray-800 mb-1">
+                          僅排目前時段
+                        </span>
+                        <span className="text-sm text-gray-500">
+                          只計算並分配 {currentShiftInfo.label} 的人員
+                        </span>
+                      </button>
+
+                      {/* 選項 2: 全時段連續排班 */}
+                      <button
+                        onClick={() => handleQuickSchedule('all')}
+                        disabled={scheduleLoading}
+                        className="flex flex-col items-center justify-center p-6 border-2 border-blue-200 bg-blue-50/30 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <CalendarDays className="w-8 h-8 text-blue-500 group-hover:scale-110 transition-transform mb-3" />
+                        <span className="text-lg font-bold text-blue-900 mb-1">
+                          全時段連續排班
+                        </span>
+                        <div className="flex items-center gap-2 text-sm text-blue-700">
+                          <span>早班</span>
+                          <ArrowRight className="w-3 h-3" />
+                          <span>晚班</span>
+                          <ArrowRight className="w-3 h-3" />
+                          <span>大夜班</span>
+                        </div>
+                        <span className="text-xs text-blue-600 mt-2">
+                          * 將依序計算並請您確認每個時段的排班結果
+                        </span>
+                      </button>
                     </div>
-
-                    {/* 選項 2: 快速排班（匈牙利演算法）*/}
-                    <button
-                      onClick={handleQuickSchedule}
-                      disabled={scheduleLoading}
-                      className="w-full text-left p-6 border-2 border-blue-200 rounded-lg hover:border-blue-400 hover:bg-blue-50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <div className="flex items-start gap-4">
-                        <div className="p-3 bg-blue-100 rounded-lg group-hover:bg-blue-200 transition-colors">
-                          <Sparkles className="w-6 h-6 text-blue-600" />
-                        </div>
-                        <div className="flex-1">
-                          <h4 className="text-lg font-bold text-gray-800 mb-1">
-                            使用現有資料排班（推薦）
-                          </h4>
-                          <p className="text-sm text-gray-600 mb-3">
-                            使用匈牙利演算法，根據當前已設定的護士和休假日，自動分配到具體手術室
-                          </p>
-                          <div className="space-y-1.5 text-xs text-gray-500">
-                            <div className="flex items-center gap-2">
-                              <CheckSquare className="w-4 h-4 text-green-500" />
-                              <span>考慮護士對手術室的熟悉度</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <CheckSquare className="w-4 h-4 text-green-500" />
-                              <span>平衡護士工作負荷</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <CheckSquare className="w-4 h-4 text-green-500" />
-                              <span>匹配護士資歷與手術室複雜度</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <CheckSquare className="w-4 h-4 text-green-500" />
-                              <span>找到總成本最小的最佳分配方案</span>
-                            </div>
-                          </div>
-                          <div className="mt-3 px-3 py-1.5 bg-blue-100 rounded text-xs text-blue-700 inline-block">
-                            ⚡ 快速執行 · 適合立即使用
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-
-                    {/* 選項 1: 完整輪班（暫未實作）*/}
-                    <button
-                      onClick={handleFullSchedule}
-                      disabled={scheduleLoading}
-                      className="w-full text-left p-6 border-2 border-gray-200 rounded-lg hover:border-gray-300 hover:bg-gray-50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <div className="flex items-start gap-4">
-                        <div className="p-3 bg-gray-100 rounded-lg group-hover:bg-gray-200 transition-colors">
-                          <Building2 className="w-6 h-6 text-gray-600" />
-                        </div>
-                        <div className="flex-1">
-                          <h4 className="text-lg font-bold text-gray-800 mb-1 flex items-center gap-2">
-                            完整輪班規劃
-                            <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded font-medium">
-                              開發中
-                            </span>
-                          </h4>
-                          <p className="text-sm text-gray-600 mb-3">
-                            從零開始規劃整個排班週期，包含護士選擇、休假日設定、手術室分配
-                          </p>
-                          <div className="space-y-1.5 text-xs text-gray-500">
-                            <div className="flex items-center gap-2">
-                              <Square className="w-4 h-4 text-gray-400" />
-                              <span>跨週期輪班規劃</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Square className="w-4 h-4 text-gray-400" />
-                              <span>考慮歷史休假記錄</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Square className="w-4 h-4 text-gray-400" />
-                              <span>公平性最佳化</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Square className="w-4 h-4 text-gray-400" />
-                              <span>自動平衡工作量</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </button>
                   </div>
                 )}
 
@@ -1572,7 +1276,11 @@ const NurseShiftManagePage = () => {
                 {scheduleLoading && !algorithmResults && (
                   <div className="mt-6 flex flex-col items-center justify-center py-8">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
-                    <p className="text-sm text-gray-600 font-medium">演算法執行中...</p>
+                    <p className="text-sm text-gray-600 font-medium">
+                      {currentSequenceStep 
+                        ? `正在計算 ${getShiftInfo(currentSequenceStep).label} 排班...` 
+                        : '演算法執行中...'}
+                    </p>
                     <p className="text-xs text-gray-500 mt-1">這可能需要幾秒鐘</p>
                   </div>
                 )}

@@ -4,6 +4,206 @@
 const ALGORITHM_API_URL =
   import.meta.env.VITE_ALGORITHM_API_URL || "http://localhost:8000";
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+
+/**
+ * 執行指定時段的完整自動排班流程
+ * 邏輯：從資料庫讀取已分類的護士名單 -> 針對每類分別執行演算法
+ * @param {string} shift - 時段 ('morning', 'evening', 'night')
+ */
+export const runAutoScheduleForShift = async (shift) => {
+  const shiftMap = { morning: "早班", evening: "晚班", night: "大夜班" };
+  const shiftName = shiftMap[shift];
+
+  console.log(`🚀 [Service] 開始計算時段: ${shiftName} (${shift})`);
+
+  try {
+    const fetchOptions = {
+      method: "GET",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+    };
+
+    // 1. 平行抓取
+    const [roomTypesRes, assignmentsRes] = await Promise.all([
+      fetch(
+        `${API_BASE_URL}/api/surgery-rooms/types-with-count?shift=${shift}`,
+        fetchOptions
+      ),
+      fetch(
+        `${API_BASE_URL}/api/nurse-schedules/shift-assignments/${shift}`,
+        fetchOptions
+      ),
+    ]);
+
+    if (!roomTypesRes.ok) throw new Error("無法取得手術室類型");
+    if (!assignmentsRes.ok) throw new Error("無法取得現有排班資料");
+
+    const roomTypesData = await roomTypesRes.json();
+    const assignmentsData = await assignmentsRes.json();
+
+    const roomTypes = roomTypesData.data || [];
+    const assignmentsByRoomType = assignmentsData.data || {};
+
+    const shiftResults = [];
+    const shiftAssignments = {};
+    const shiftFloatSchedules = {};
+
+    // ★ 新增：建立 ID 對應名字的映射表
+    const nurseNameMap = {};
+
+    // 2. 針對每個手術室類型執行排班
+    for (const roomTypeData of roomTypes) {
+      const roomType = roomTypeData.type;
+
+      if (shift === "night" && roomType !== "RE") continue;
+
+      const categorizedNurses = assignmentsByRoomType[roomType] || [];
+
+      // ★ 收集名字
+      categorizedNurses.forEach((n) => {
+        const id = n.id || n.employee_id;
+        if (id && n.name) {
+          nurseNameMap[id] = n.name;
+        }
+      });
+
+      if (categorizedNurses.length === 0) {
+        console.log(`[Service] ${roomType} 資料庫中無已分配護士，跳過`);
+        continue;
+      }
+
+      console.log(
+        `[Service] 處理 ${roomType}: ${categorizedNurses.length} 位護士`
+      );
+
+      // 3. 獲取手術室
+      const dbShiftName = {
+        morning: "morning_shift",
+        evening: "night_shift",
+        night: "graveyard_shift",
+      }[shift];
+
+      const roomsResponse = await fetch(
+        `${API_BASE_URL}/api/surgery-rooms/type/${encodeURIComponent(
+          roomType
+        )}?shift=${dbShiftName}`,
+        fetchOptions
+      );
+
+      if (!roomsResponse.ok) continue;
+      const roomsData = await roomsResponse.json();
+      const allRooms = roomsData.data || [];
+
+      const shiftField = {
+        morning: "morningShift",
+        evening: "nightShift",
+        night: "graveyardShift",
+      }[shift];
+      const rooms = allRooms.filter(
+        (room) => room[shiftField] === true || room[shiftField] === 1
+      );
+
+      if (rooms.length === 0) continue;
+
+      // 4. 匈牙利演算法
+      const formattedNurses = formatNursesForAlgorithm(
+        categorizedNurses.map((n) => ({
+          ...n,
+          roomType,
+          schedulingTime: shiftName,
+          id: n.id || n.employee_id,
+          total_fixed_count: n.total_fixed_count || n.historyFixedCount || 0,
+          total_float_count: n.total_float_count || n.historyFloatCount || 0,
+          workload_this_week: n.workload_this_week || n.workloadThisWeek || 0,
+          last_assigned_room: null,
+        }))
+      );
+
+      const formattedRooms = formatRoomsForAlgorithm(rooms, roomType, shift);
+
+      const hungarianResult = await assignNursesWithHungarian({
+        shift: shiftName,
+        roomType,
+        nurses: formattedNurses,
+        rooms: formattedRooms,
+      });
+
+      if (!hungarianResult.success) continue;
+
+      const fixedAssignments = hungarianResult.data.assignments;
+      shiftResults.push({ roomType, result: hungarianResult.data });
+      shiftAssignments[roomType] = fixedAssignments;
+
+      // 5. 流動護士排班
+      const assignedIds = new Set(fixedAssignments.map((a) => a.employee_id));
+      const floatNurses = categorizedNurses
+        .filter((n) => !assignedIds.has(n.id || n.employee_id))
+        .map((n) => ({
+          employee_id: n.id || n.employee_id,
+          name: n.name,
+          day_off:
+            n.dayOff ||
+            (n.day_off_ids ? n.day_off_ids.map((d) => d - 1) : []) ||
+            [],
+        }));
+
+      if (floatNurses.length > 0) {
+        const fixedAssignmentsByRoom = {};
+        fixedAssignments.forEach((a) => {
+          if (!fixedAssignmentsByRoom[a.assigned_room])
+            fixedAssignmentsByRoom[a.assigned_room] = [];
+          const original = categorizedNurses.find(
+            (n) => (n.id || n.employee_id) === a.employee_id
+          );
+          fixedAssignmentsByRoom[a.assigned_room].push({
+            employee_id: a.employee_id,
+            day_off: original?.dayOff || [],
+          });
+        });
+
+        const roomRequirements = {};
+        rooms.forEach((room) => {
+          roomRequirements[room.id] = getNurseCountByShift(room, shift);
+        });
+
+        const floatResponse = await fetch(
+          `${ALGORITHM_API_URL}/api/assignment/float-nurse-schedule`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              shift: shiftName,
+              room_type: roomType,
+              float_nurses: floatNurses,
+              fixed_assignments: fixedAssignmentsByRoom,
+              room_requirements: roomRequirements,
+              config: { strategy: "balanced" },
+            }),
+          }
+        );
+
+        if (floatResponse.ok) {
+          shiftFloatSchedules[roomType] = await floatResponse.json();
+        }
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        results: shiftResults,
+        assignments: shiftAssignments,
+        floatSchedules: shiftFloatSchedules,
+        nurseNameMap, // ★ 回傳名字對照表
+      },
+    };
+  } catch (error) {
+    console.error("[Service] 排班運算錯誤:", error);
+    throw error;
+  }
+};
+
 /**
  * 呼叫匈牙利演算法進行護士分配
  * @param {Object} params - 分配參數
@@ -100,8 +300,6 @@ export const checkAlgorithmHealth = async () => {
  */
 export const formatNursesForAlgorithm = (nurses) => {
   return nurses.map((nurse) => {
-    console.log("原始護士資料欄位:", Object.keys(nurse));
-
     return {
       employee_id: nurse.employee_id || nurse.id, // 確保有吃到 ID
       name: nurse.name,
