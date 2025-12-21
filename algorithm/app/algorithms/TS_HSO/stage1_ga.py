@@ -1,5 +1,5 @@
 """
-第一階段：基因演算法手術室分配
+第一階段：基因演算法手術室分配 - 修正版
 """
 
 import random
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class Stage1GeneticAlgorithm:
-    """第一階段：GA手術室分配"""
+    """第一階段：GA手術室分配 - 修正版"""
     
     def __init__(self, db_connection):
         self.db = db_connection
@@ -25,7 +25,7 @@ class Stage1GeneticAlgorithm:
         self.POPULATION_SIZE = 50
         self.GENERATIONS = 100
         self.CROSSOVER_RATE = 0.8
-        self.MUTATION_RATE = 0.15
+        self.MUTATION_RATE = 0.2  # 提高突變率，增加多樣性
         self.ELITISM_RATE = 0.1
     
     def allocate_rooms(self, surgeries: List[Surgery]) -> Dict[str, Dict]:
@@ -53,58 +53,58 @@ class Stage1GeneticAlgorithm:
     
     def constructive_heuristic(self, surgeries: List[Surgery]) -> Dict[str, Dict]:
         """
-        建構啟發式：按時長排序，短手術優先分配
+        建構啟發式：按時長排序，採用 Round-Robin 分配策略
+        
+        修正重點：不再只選「最佳」手術室，而是輪流分配到多個手術室
         """
         allocation = {}
         
         # 按手術時長排序（短→長）
         sorted_surgeries = sorted(surgeries, key=lambda s: s.duration)
         
+        # [修正] 先收集所有可用手術室，準備輪流分配
+        room_pool = {}  # {room_type: [room_list]}
+        
         for surgery in sorted_surgeries:
-            # 取得候選手術室
-            candidate_rooms = get_candidate_rooms(
-                self.db,
-                surgery.surgery_room_type,
-                surgery.nurse_count,
-                exclude_emergency=True  # 排除緊急手術室
-            )
+            room_type = surgery.surgery_room_type
             
-            if not candidate_rooms:
+            # 如果該類型手術室還沒收集，先收集
+            if room_type not in room_pool:
+                candidate_rooms = get_candidate_rooms(
+                    self.db,
+                    room_type,
+                    surgery.nurse_count,
+                    exclude_emergency=True
+                )
+                room_pool[room_type] = candidate_rooms if candidate_rooms else []
+            
+            if not room_pool[room_type]:
                 logger.warning(f"手術 {surgery.surgery_id} 無可用手術室")
                 continue
             
-            best_room = None
-            best_score = -float('inf')
-            
-            # 評估每個候選手術室
-            for room in candidate_rooms:
-                # 檢查當天總容量
-                if check_daily_overload(
-                    self.db, 
-                    room['id'], 
-                    surgery.surgery_date, 
-                    surgery.duration
-                ):
-                    continue  # 過載，跳過
-                
-                # 計算分配分數
-                score = calculate_allocation_score(
-                    self.db,
-                    room,
-                    surgery
+            # [修正] Round-Robin 分配：輪流選擇手術室
+            # 選擇當前負載最低的手術室
+            room_loads = {}
+            for room in room_pool[room_type]:
+                # 計算該手術室已分配的手術時長
+                load = sum(
+                    (s.duration + 0.5) for s_id, alloc in allocation.items()
+                    if alloc['room_id'] == room['id']
+                    for s in surgeries if s.surgery_id == s_id
                 )
-                
-                if score > best_score:
-                    best_score = score
-                    best_room = room
+                room_loads[room['id']] = load
             
-            if best_room:
-                allocation[surgery.surgery_id] = {
-                    'room_id': best_room['id'],
-                    'suggested_shift': 'morning',  # 預設早班優先
-                    'score': best_score
-                }
+            # 選擇負載最小的手術室
+            best_room_id = min(room_loads, key=room_loads.get)
+            best_room = next(r for r in room_pool[room_type] if r['id'] == best_room_id)
+            
+            allocation[surgery.surgery_id] = {
+                'room_id': best_room['id'],
+                'suggested_shift': 'morning',
+                'score': 0
+            }
         
+        logger.info(f"啟發式分配完成，使用 {len(set(a['room_id'] for a in allocation.values()))} 間手術室")
         return allocation
     
     def genetic_algorithm(
@@ -127,11 +127,12 @@ class Stage1GeneticAlgorithm:
         
         best_solution = None
         best_fitness = -float('inf')
+        no_improvement_count = 0
         
         for generation in range(self.GENERATIONS):
             # 計算適應度
             fitness_scores = [
-                calculate_fitness(self.db, individual, surgeries)
+                calculate_fitness(individual, surgeries, None)
                 for individual in population
             ]
             
@@ -140,7 +141,21 @@ class Stage1GeneticAlgorithm:
             if fitness_scores[gen_best_idx] > best_fitness:
                 best_fitness = fitness_scores[gen_best_idx]
                 best_solution = population[gen_best_idx].copy()
-                logger.debug(f"世代 {generation}: 最佳適應度 = {best_fitness:.2f}")
+                no_improvement_count = 0
+                
+                # 計算當前最佳解使用的手術室數量
+                used_rooms = len(set(alloc['room_id'] for alloc in best_solution.values()))
+                logger.debug(
+                    f"世代 {generation}: 適應度={best_fitness:.2f}, "
+                    f"使用手術室={used_rooms}"
+                )
+            else:
+                no_improvement_count += 1
+            
+            # 早停機制：如果連續20代沒改進，提前結束
+            if no_improvement_count >= 20:
+                logger.info(f"連續 {no_improvement_count} 代無改進，提前結束")
+                break
             
             # 選擇
             selected = self.selection(population, fitness_scores)
@@ -159,7 +174,8 @@ class Stage1GeneticAlgorithm:
             # 產生新族群
             population = elite + offspring[:self.POPULATION_SIZE - elite_size]
         
-        logger.info(f"GA完成，最佳適應度: {best_fitness:.2f}")
+        used_rooms = len(set(alloc['room_id'] for alloc in best_solution.values()))
+        logger.info(f"GA完成，最佳適應度={best_fitness:.2f}, 使用手術室={used_rooms}")
         return best_solution
     
     def initialize_population(
@@ -167,29 +183,32 @@ class Stage1GeneticAlgorithm:
         surgeries: List[Surgery], 
         initial_solution: Dict
     ) -> List[Dict]:
-        """初始化族群"""
+        """初始化族群 - 增加多樣性"""
         population = [initial_solution]  # 包含初始解
         
         # 產生隨機個體
         for _ in range(self.POPULATION_SIZE - 1):
             individual = {}
+            
+            # 收集所有可用手術室
+            room_pools = {}
             for surgery in surgeries:
-                if surgery.surgery_id in initial_solution:
-                    # 有一定機率使用初始解的分配
-                    if random.random() < 0.3:
-                        individual[surgery.surgery_id] = initial_solution[surgery.surgery_id].copy()
-                        continue
-                
-                # 隨機分配
-                candidate_rooms = get_candidate_rooms(
-                    self.db,
-                    surgery.surgery_room_type,
-                    surgery.nurse_count,
-                    exclude_emergency=True
-                )
-                
-                if candidate_rooms:
-                    room = random.choice(candidate_rooms)
+                room_type = surgery.surgery_room_type
+                if room_type not in room_pools:
+                    candidate_rooms = get_candidate_rooms(
+                        self.db,
+                        room_type,
+                        surgery.nurse_count,
+                        exclude_emergency=True
+                    )
+                    room_pools[room_type] = candidate_rooms if candidate_rooms else []
+            
+            # 隨機分配
+            for surgery in surgeries:
+                room_type = surgery.surgery_room_type
+                if room_pools.get(room_type):
+                    # 隨機選擇一個手術室
+                    room = random.choice(room_pools[room_type])
                     individual[surgery.surgery_id] = {
                         'room_id': room['id'],
                         'suggested_shift': random.choice(['morning', 'night']),
@@ -250,7 +269,11 @@ class Stage1GeneticAlgorithm:
         return offspring
     
     def mutation(self, population: List[Dict], surgeries: List[Surgery]) -> List[Dict]:
-        """突變：隨機改變手術室分配"""
+        """
+        突變：隨機改變手術室分配
+        
+        [修正] 提高突變率，並鼓勵分配到不同手術室
+        """
         for individual in population:
             for surgery in surgeries:
                 if random.random() < self.MUTATION_RATE:
@@ -263,7 +286,22 @@ class Stage1GeneticAlgorithm:
                     )
                     
                     if candidate_rooms:
-                        new_room = random.choice(candidate_rooms)
+                        # [修正] 優先選擇當前個體中負載較低的手術室
+                        room_loads = {}
+                        for room in candidate_rooms:
+                            load = sum(
+                                1 for s_id, alloc in individual.items()
+                                if alloc['room_id'] == room['id']
+                            )
+                            room_loads[room['id']] = load
+                        
+                        # 有50%機率選最低負載，50%隨機選
+                        if random.random() < 0.5:
+                            new_room_id = min(room_loads, key=room_loads.get)
+                            new_room = next(r for r in candidate_rooms if r['id'] == new_room_id)
+                        else:
+                            new_room = random.choice(candidate_rooms)
+                        
                         individual[surgery.surgery_id] = {
                             'room_id': new_room['id'],
                             'suggested_shift': random.choice(['morning', 'night']),

@@ -1,4 +1,5 @@
 """
+constraints.py - 修正版
 約束檢查與可行性驗證
 """
 
@@ -17,9 +18,6 @@ def check_daily_overload(
 ) -> bool:
     """
     檢查手術室當天是否會過載
-    
-    Returns:
-        True = 會過載, False = 不會過載
     """
     capacity_info = db.execute_query(
         """
@@ -31,7 +29,7 @@ def check_daily_overload(
     )
     
     if not capacity_info:
-        logger.warning(f"找不到容量資訊: {room_id} {date}")
+        # logger.warning(f"找不到容量資訊: {room_id} {date}")
         return True  # 保守起見，視為過載
     
     total = capacity_info[0]['daily_total'] or 0
@@ -50,17 +48,7 @@ def get_candidate_rooms(
 ) -> List[Dict]:
     """
     取得符合條件的候選手術室
-    
-    Args:
-        db: 資料庫連接
-        room_type: 手術室類型
-        required_nurses: 需要的護士數
-        exclude_emergency: 是否排除緊急手術室
-    
-    Returns:
-        符合條件的手術室列表
     """
-    # 建立排除條件
     exclude_types = []
     if exclude_emergency:
         exclude_types.append('RE')
@@ -94,13 +82,16 @@ def find_feasible_time_slots(
     date,
     duration: float,
     doctor_id: str,
-    assistant_id: Optional[str]
+    assistant_id: Optional[str],
+    current_resource_usage: Dict[str, Dict] = None
 ) -> List[Dict]:
     """
-    找出所有可行的時間段
+    找出所有可行的時間段 (包含即時佔用檢查) - 修正版
     
-    Returns:
-        可行時段列表，每個時段包含 start_time, end_time, cleanup_end
+    關鍵修正：
+    1. 正確合併資料庫排程與即時排程
+    2. 使用 cleanup_end_time 檢查手術室衝突
+    3. 確保時間比較的一致性
     """
     feasible_slots = []
     
@@ -108,9 +99,15 @@ def find_feasible_time_slots(
     room_info = db.execute_query(
         "SELECT * FROM surgery_room WHERE id = %s",
         (room_id,)
-    )[0]
+    )
     
-    # 取得當天已排程的手術
+    if not room_info:
+        logger.warning(f"找不到手術室: {room_id}")
+        return []
+    
+    room_info = room_info[0]
+    
+    # 1. 取得資料庫中已有的手術 (Existing DB Schedules)
     existing_surgeries = db.execute_query(
         """
         SELECT start_time, cleanup_end_time 
@@ -121,7 +118,25 @@ def find_feasible_time_slots(
         (room_id, date)
     )
     
-    # 取得醫生時間表
+    # 轉換為統一格式
+    room_occupied_slots = []
+    for surg in existing_surgeries:
+        room_occupied_slots.append({
+            'start_time': surg['start_time'],
+            'end_time': surg['cleanup_end_time']  # 使用清潔結束時間
+        })
+
+    # [修正] 合併 "當前批次" 剛剛排進去的手術室佔用 (In-Memory Room Usage)
+    if current_resource_usage and 'room' in current_resource_usage:
+        if room_id in current_resource_usage['room']:
+            for usage in current_resource_usage['room'][room_id]:
+                if usage['date'] == date:
+                    room_occupied_slots.append({
+                        'start_time': usage['start_time'],
+                        'end_time': usage['cleanup_end_time']  # 關鍵：使用清潔結束時間
+                    })
+    
+    # 2. 準備醫師佔用時間 (資料庫 + 即時)
     doctor_schedule = db.execute_query(
         """
         SELECT start_time, end_time
@@ -134,8 +149,21 @@ def find_feasible_time_slots(
         (doctor_id, date)
     )
     
-    # 取得助理時間表
-    assistant_schedule = []
+    doctor_occupied_slots = [{'start_time': d['start_time'], 'end_time': d['end_time']} 
+                             for d in doctor_schedule]
+
+    # 合併醫師即時佔用
+    if current_resource_usage and 'doctor' in current_resource_usage:
+        if doctor_id in current_resource_usage['doctor']:
+            for usage in current_resource_usage['doctor'][doctor_id]:
+                if usage['date'] == date:
+                    doctor_occupied_slots.append({
+                        'start_time': usage['start_time'],
+                        'end_time': usage['end_time']
+                    })
+
+    # 3. 準備助理醫師佔用時間 (資料庫 + 即時)
+    assistant_occupied_slots = []
     if assistant_id:
         assistant_schedule = db.execute_query(
             """
@@ -148,10 +176,23 @@ def find_feasible_time_slots(
             """,
             (assistant_id, date)
         )
+        
+        assistant_occupied_slots = [{'start_time': a['start_time'], 'end_time': a['end_time']} 
+                                   for a in assistant_schedule]
+        
+        # 合併助理即時佔用
+        if current_resource_usage and 'assistant' in current_resource_usage:
+            if assistant_id in current_resource_usage['assistant']:
+                for usage in current_resource_usage['assistant'][assistant_id]:
+                    if usage['date'] == date:
+                        assistant_occupied_slots.append({
+                            'start_time': usage['start_time'],
+                            'end_time': usage['end_time']
+                        })
     
-    # 產生候選時段（每30分鐘一個）
-    start_hour = 8  # 早班開始
-    end_hour = 24   # 晚班結束
+    # 產生候選時段（每30分鐘一個，從早上8點開始）
+    start_hour = 8
+    end_hour = 20  # 最晚20:00開始手術
     
     current_time = datetime.combine(date, time(start_hour, 0))
     end_time_limit = datetime.combine(date, time(end_hour, 0))
@@ -164,12 +205,13 @@ def find_feasible_time_slots(
         # 檢查所有約束
         if is_slot_feasible(
             current_time.time(),
+            surgery_end.time(),
             cleanup_end.time(),
             duration,
             room_info,
-            existing_surgeries,
-            doctor_schedule,
-            assistant_schedule,
+            room_occupied_slots,
+            doctor_occupied_slots,
+            assistant_occupied_slots,
             db,
             room_id,
             date
@@ -184,7 +226,6 @@ def find_feasible_time_slots(
                 'cross_shift': is_cross
             })
         
-        # 下一個候選時間（30分鐘後）
         current_time += timedelta(minutes=30)
     
     return feasible_slots
@@ -192,35 +233,42 @@ def find_feasible_time_slots(
 
 def is_slot_feasible(
     start_time: time,
+    end_time: time,
     cleanup_end: time,
     duration: float,
     room_info: Dict,
-    existing_surgeries: List[Dict],
-    doctor_schedule: List[Dict],
-    assistant_schedule: List[Dict],
+    room_occupied_slots: List[Dict],
+    doctor_occupied_slots: List[Dict],
+    assistant_occupied_slots: List[Dict],
     db,
     room_id: str,
     date
 ) -> bool:
-    """檢查時段是否可行"""
+    """
+    檢查時段是否可行 - 修正版
+    
+    修正重點：
+    1. 手術室衝突檢查使用 cleanup_end_time
+    2. 醫生/助理衝突檢查包含休息時間
+    """
     
     # 1. 檢查時段是否開放
     if not is_shift_open(start_time, room_info):
         return False
     
-    # 2. 檢查手術室衝突（含清潔時間）
-    for surgery in existing_surgeries:
+    # 2. [修正] 檢查手術室衝突（含清潔時間）
+    for occupied in room_occupied_slots:
         if time_overlap(
             start_time, 
-            cleanup_end,
-            surgery['start_time'],
-            surgery['cleanup_end_time']
+            cleanup_end,  # 使用清潔結束時間
+            occupied['start_time'],
+            occupied['end_time']  # 這裡已經是清潔結束時間
         ):
             return False
     
     # 3. 檢查醫生衝突（含1小時休息）
     end_with_rest = add_minutes_to_time(cleanup_end, 60)
-    for occupied in doctor_schedule:
+    for occupied in doctor_occupied_slots:
         occupied_start_with_rest = subtract_minutes_from_time(occupied['start_time'], 60)
         occupied_end_with_rest = add_minutes_to_time(occupied['end_time'], 60)
         
@@ -233,7 +281,7 @@ def is_slot_feasible(
             return False
     
     # 4. 檢查助理醫生衝突（含1小時休息）
-    for occupied in assistant_schedule:
+    for occupied in assistant_occupied_slots:
         occupied_start_with_rest = subtract_minutes_from_time(occupied['start_time'], 60)
         occupied_end_with_rest = add_minutes_to_time(occupied['end_time'], 60)
         
@@ -255,15 +303,8 @@ def is_slot_feasible(
 
 
 def calculate_shift_occupation(start_time: time, duration: float) -> Dict[str, float]:
-    """
-    計算手術佔用各時段的時間
-    
-    Returns:
-        {'morning': X, 'night': Y, 'graveyard': Z}
-    """
+    """計算手術佔用各時段的時間"""
     total_duration = duration + 0.5  # 含清潔
-    
-    # 轉換為小時數（浮點數）
     start_hour = start_time.hour + start_time.minute / 60
     end_hour = start_hour + total_duration
     
@@ -278,7 +319,6 @@ def calculate_shift_occupation(start_time: time, duration: float) -> Dict[str, f
     for shift_name, (shift_start, shift_end) in shifts.items():
         overlap_start = max(start_hour, shift_start)
         overlap_end = min(end_hour, shift_end)
-        
         overlap_hours = max(0, overlap_end - overlap_start)
         
         if overlap_hours > 0:
@@ -308,7 +348,6 @@ def has_capacity(db, room_id: str, date, shift: str, required_hours: float) -> b
 def is_shift_open(start_time: time, room_info: Dict) -> bool:
     """檢查時段是否開放"""
     hour = start_time.hour
-    
     if 8 <= hour < 16:
         return room_info.get('morning_shift', False)
     elif 16 <= hour < 24:
@@ -319,24 +358,12 @@ def is_shift_open(start_time: time, room_info: Dict) -> bool:
 
 def is_cross_shift(start_time: time, end_time: time) -> bool:
     """判斷是否跨時段"""
-    start_hour = start_time.hour
-    end_hour = end_time.hour
-    
-    # 判斷開始和結束是否在不同時段
-    start_shift = get_shift(start_hour)
-    end_shift = get_shift(end_hour)
-    
-    return start_shift != end_shift
-
-
-def get_shift(hour: int) -> str:
-    """取得時段名稱"""
-    if 8 <= hour < 16:
-        return 'morning'
-    elif 16 <= hour < 24:
-        return 'night'
-    else:
+    def get_shift(h):
+        if 8 <= h < 16: return 'morning'
+        if 16 <= h < 24: return 'night'
         return 'graveyard'
+        
+    return get_shift(start_time.hour) != get_shift(end_time.hour)
 
 
 def time_overlap(start1: time, end1: time, start2: time, end2: time) -> bool:

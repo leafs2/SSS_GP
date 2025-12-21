@@ -5,6 +5,7 @@ import express from "express";
 import { requireAuth } from "./middleware/checkAuth.js";
 
 const router = express.Router();
+const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
 
 let pool;
 export const setPool = (dbPool) => {
@@ -14,48 +15,136 @@ export const setPool = (dbPool) => {
 // 記錄最後排程時間
 let lastScheduleTime = null;
 
+// 確保日期輸出為 YYYY-MM-DD (使用本地時間避免時區誤差)
+const formatDateToLocal = (dateInput) => {
+  if (!dateInput) return null;
+  const d = new Date(dateInput);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+// 確保時間格式為 HH:MM:SS
+const formatTime = (timeInput) => {
+  if (!timeInput) return "00:00:00";
+  if (typeof timeInput === "string") return timeInput;
+  if (timeInput instanceof Date) {
+    return timeInput.toTimeString().split(" ")[0];
+  }
+  return String(timeInput);
+};
+
+const updateExpiredSurgeries = async () => {
+  if (!pool) return;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // 將日期小於今天 且 狀態為 scheduled 的手術轉為 completed
+    const updateQuery = `
+      UPDATE surgery 
+      SET status = 'completed' 
+      WHERE surgery_date < CURRENT_DATE 
+      AND status = 'scheduled'
+      RETURNING surgery_id
+    `;
+
+    const result = await client.query(updateQuery);
+    await client.query("COMMIT");
+
+    if (result.rowCount > 0) {
+      console.log(
+        `[TS-HSO] ✅ 自動維護：已將 ${result.rowCount} 筆過期手術轉為 completed`
+      );
+    }
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error(`[TS-HSO] ❌ 更新過期手術失敗: ${error.message}`);
+  } finally {
+    client.release();
+  }
+};
+
 /**
- * 核心邏輯：執行排程運算
- * @param {Object} date_range - 可選，日期範圍 {start, end}
- * @returns {Object} 排程結果
+ * @param {Object} date_range - 日期範圍 {start, end}
+ * @param {Boolean} forceAllFuture - 是否強制重排所有未來日期的手術 (啟動時使用)
  */
-const executeSchedulingLogic = async (date_range = null) => {
+const executeSchedulingLogic = async (
+  date_range = null,
+  forceAllFuture = false
+) => {
   const globalStart = Date.now();
   console.log(
-    `\n[TS-HSO] 開始執行排程核心邏輯... Time: ${new Date().toISOString()}`
+    `\n[TS-HSO] 開始執行排程核心邏輯 (${
+      forceAllFuture ? "啟動全域重排" : "定期檢查"
+    })... Time: ${new Date().toISOString()}`
   );
 
   try {
-    // --- Step 1: 資料讀取 ---
-    const step1Start = Date.now();
-    console.log("[TS-HSO] 步驟 1/5: 讀取資料庫...");
+    // --- Step 1: 找出需要重排的日期 ---
+    let targetDatesQuery = "";
+    let targetDatesParams = [];
 
+    if (forceAllFuture) {
+      // [模式 A] 啟動時：找出所有 "今天以後" 且 "有未完成手術(scheduled/pending)" 的日期
+      targetDatesQuery = `
+        SELECT DISTINCT surgery_date 
+        FROM surgery 
+        WHERE surgery_date >= CURRENT_DATE
+        AND status IN ('pending', 'scheduled')
+      `;
+    } else {
+      // [模式 B] 定期檢查：只針對 "有新掛號(pending)" 的日期進行重排
+      targetDatesQuery = `
+        SELECT DISTINCT surgery_date 
+        FROM surgery 
+        WHERE status = 'pending'
+        ${date_range ? "AND surgery_date BETWEEN $1 AND $2" : ""}
+      `;
+      if (date_range) targetDatesParams = [date_range.start, date_range.end];
+    }
+
+    const targetDatesResult = await pool.query(
+      targetDatesQuery,
+      targetDatesParams
+    );
+
+    // 轉為 YYYY-MM-DD 字串陣列
+    const targetDates = targetDatesResult.rows.map((row) =>
+      formatDateToLocal(row.surgery_date)
+    );
+
+    if (targetDates.length === 0) {
+      console.log("[TS-HSO] 目前無須重排的日期，流程結束。");
+      return { success: true, message: "無待排程手術" };
+    }
+
+    console.log(
+      `[TS-HSO] 目標重排日期 (${targetDates.length}天): ${targetDates.join(
+        ", "
+      )}`
+    );
+
+    // --- Step 2: 讀取這些日期的「所有」手術 (包含 scheduled 和 pending) ---
+    // 全域重排關鍵：抓取所有手術重新洗牌
     const surgeriesQuery = `
       SELECT 
         surgery_id, doctor_id, assistant_doctor_id,
         surgery_type_code, patient_id, surgery_room_type,
-        surgery_date, duration, nurse_count
+        surgery_date, duration, nurse_count, status
       FROM surgery
-      WHERE status = 'pending'
-      ${date_range ? "AND surgery_date BETWEEN $1 AND $2" : ""}
+      WHERE surgery_date = ANY($1::date[]) 
+      AND status IN ('pending', 'scheduled')
       ORDER BY surgery_date, created_at
     `;
 
-    const surgeriesResult = date_range
-      ? await pool.query(surgeriesQuery, [date_range.start, date_range.end])
-      : await pool.query(surgeriesQuery);
+    const surgeriesResult = await pool.query(surgeriesQuery, [targetDates]);
+    const allSurgeries = surgeriesResult.rows;
 
-    if (surgeriesResult.rows.length === 0) {
-      console.log("[TS-HSO] 無待排程手術，流程結束。");
-      return {
-        success: true,
-        message: "沒有待排程的手術",
-        data: [],
-        statistics: {},
-        failed_surgeries: [],
-      };
-    }
+    console.log(`[TS-HSO] 共讀取 ${allSurgeries.length} 筆手術準備重排`);
 
+    // 讀取手術室資訊
     const roomsResult = await pool.query(`
       SELECT id, room_type, nurse_count, 
              morning_shift, night_shift, graveyard_shift
@@ -64,33 +153,15 @@ const executeSchedulingLogic = async (date_range = null) => {
       ORDER BY id
     `);
 
-    const existingSchedulesResult = await pool.query(`
-      SELECT 
-        sct.surgery_id, 
-        sct.room_id, 
-        s.surgery_date,
-        sct.start_time, 
-        sct.end_time, 
-        sct.cleanup_end_time
-      FROM surgery_correct_time sct
-      JOIN surgery s ON sct.surgery_id = s.surgery_id
-      WHERE s.surgery_date >= CURRENT_DATE
-    `);
-
-    console.log(`[TS-HSO] 資料讀取完成 (耗時 ${Date.now() - step1Start}ms)`);
-
-    // --- Step 2: 資料序列化 ---
-    const serializedSurgeries = surgeriesResult.rows.map((s) => ({
+    // --- Step 3: 資料序列化 ---
+    const serializedSurgeries = allSurgeries.map((s) => ({
       surgery_id: s.surgery_id,
       doctor_id: s.doctor_id,
       assistant_doctor_id: s.assistant_doctor_id || null,
       surgery_type_code: s.surgery_type_code,
       patient_id: s.patient_id,
       surgery_room_type: s.surgery_room_type,
-      surgery_date:
-        s.surgery_date instanceof Date
-          ? s.surgery_date.toISOString().split("T")[0]
-          : s.surgery_date,
+      surgery_date: formatDateToLocal(s.surgery_date),
       duration: parseFloat(s.duration),
       nurse_count: parseInt(s.nurse_count),
     }));
@@ -104,31 +175,13 @@ const executeSchedulingLogic = async (date_range = null) => {
       graveyard_shift: Boolean(r.graveyard_shift),
     }));
 
-    const serializedSchedules = existingSchedulesResult.rows.map((s) => ({
-      surgery_id: s.surgery_id,
-      room_id: s.room_id,
-      scheduled_date:
-        s.surgery_date instanceof Date
-          ? s.surgery_date.toISOString().split("T")[0]
-          : s.surgery_date,
-      start_time:
-        typeof s.start_time === "string"
-          ? s.start_time
-          : s.start_time.toString(),
-      end_time:
-        typeof s.end_time === "string" ? s.end_time : s.end_time.toString(),
-      cleanup_end_time:
-        typeof s.cleanup_end_time === "string"
-          ? s.cleanup_end_time
-          : s.cleanup_end_time.toString(),
-    }));
-
-    // --- Step 3: 呼叫演算法 ---
+    // --- Step 4: 呼叫 Python 演算法 ---
     const algoStart = Date.now();
-    console.log("[TS-HSO] 步驟 2/5: 呼叫 Python 演算法服務...");
+    console.log(`[TS-HSO] 呼叫 Python 演算法服務...`);
 
     const pythonServiceUrl =
-      process.env.PYTHON_SERVICE_URL || "http://localhost:8000";
+      process.env.PYTHON_API_URL || "http://localhost:8000";
+
     const pythonResponse = await fetch(
       `${pythonServiceUrl}/api/scheduling/trigger`,
       {
@@ -137,10 +190,12 @@ const executeSchedulingLogic = async (date_range = null) => {
         body: JSON.stringify({
           surgeries: serializedSurgeries,
           available_rooms: serializedRooms,
-          existing_schedules: serializedSchedules,
+          existing_schedules: [], // 傳空陣列，強制全域重排
           config: {
+            mode: "global_rescheduling",
             ga_generations: 100,
             ga_population: 50,
+            // AHP 權重設定
             ahp_weights: {
               duration: 0.4,
               fragment: 0.3,
@@ -153,46 +208,47 @@ const executeSchedulingLogic = async (date_range = null) => {
     );
 
     if (!pythonResponse.ok) {
-      const error = await pythonResponse.json();
-      throw new Error(error.detail || "Python 服務執行失敗");
+      let errorDetail = await pythonResponse.text();
+      try {
+        const jsonErr = JSON.parse(errorDetail);
+        errorDetail = JSON.stringify(jsonErr.detail);
+      } catch (e) {}
+      throw new Error(
+        `Python API Error (${pythonResponse.status}): ${errorDetail}`
+      );
     }
 
     const pythonResult = await pythonResponse.json();
-    console.log(`[TS-HSO] 演算法計算完成 (耗時 ${Date.now() - algoStart}ms)`);
+    if (!pythonResult.success) {
+      throw new Error(`演算法計算失敗: ${pythonResult.message}`);
+    }
 
-    // --- Step 4: 記錄分配結果明細 ---
-    console.log("[TS-HSO] 步驟 3/5: 分配結果明細:");
-    pythonResult.results.forEach((res, index) => {
-      console.log(
-        `         ${index + 1}. [${res.surgery_id}] -> 房:${
-          res.room_id
-        } | 時間:${res.start_time}~${
-          res.end_time
-        } | AHP分數:${res.ahp_score?.toFixed(2)}`
-      );
-    });
+    console.log(`[TS-HSO] 演算法計算完成 (耗時 ${Date.now() - algoStart}ms)`);
 
     // --- Step 5: 寫入資料庫 ---
     const dbStart = Date.now();
-    console.log("[TS-HSO] 步驟 4/5: 寫入資料庫交易...");
-
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
 
+      // 5.1 清除這些日期所有的舊排程 (避免衝突)
+      const deleteQuery = `
+        DELETE FROM surgery_correct_time 
+        WHERE surgery_id IN (
+            SELECT surgery_id FROM surgery 
+            WHERE surgery_date = ANY($1::date[])
+        )
+      `;
+      await client.query(deleteQuery, [targetDates]);
+
+      // 5.2 寫入新的排程結果
       for (const result of pythonResult.results) {
         await client.query(
           `
           INSERT INTO surgery_correct_time 
           (surgery_id, room_id, start_time, end_time, cleanup_end_time)
           VALUES ($1, $2, $3, $4, $5)
-          ON CONFLICT (surgery_id) 
-          DO UPDATE SET
-            room_id = EXCLUDED.room_id,
-            start_time = EXCLUDED.start_time,
-            end_time = EXCLUDED.end_time,
-            cleanup_end_time = EXCLUDED.cleanup_end_time
-        `,
+          `,
           [
             result.surgery_id,
             result.room_id,
@@ -202,6 +258,7 @@ const executeSchedulingLogic = async (date_range = null) => {
           ]
         );
 
+        // 更新狀態為 scheduled
         await client.query(
           `UPDATE surgery SET status = 'scheduled' WHERE surgery_id = $1`,
           [result.surgery_id]
@@ -209,34 +266,107 @@ const executeSchedulingLogic = async (date_range = null) => {
       }
 
       await client.query("COMMIT");
-      console.log(`[TS-HSO] 資料庫寫入完成 (耗時 ${Date.now() - dbStart}ms)`);
+      console.log(`[TS-HSO] 資料庫更新完成 (耗時 ${Date.now() - dbStart}ms)`);
     } catch (error) {
       await client.query("ROLLBACK");
-      console.error("[TS-HSO] 資料庫寫入失敗，交易已 rollback");
+      console.error("[TS-HSO] 資料庫交易失敗:", error);
       throw error;
     } finally {
       client.release();
     }
 
+    // --- Step 6: 顯示詳細分數與分配結果 (Console Log) ---
+    console.log("\n==================================================");
+    console.log("             📋 TS-HSO 排程結果報告              ");
+    console.log("==================================================");
+    console.log("手術ID      | 手術室 | 時段            | AHP分數");
+    console.log("------------|--------|-----------------|---------");
+
+    // 依日期和手術室排序顯示
+    const sortedResults = pythonResult.results.sort((a, b) => {
+      if (a.room_id === b.room_id) {
+        return a.start_time.localeCompare(b.start_time);
+      }
+      return a.room_id.localeCompare(b.room_id);
+    });
+
+    sortedResults.forEach((res) => {
+      const score =
+        res.ahp_score !== undefined ? Number(res.ahp_score).toFixed(2) : "N/A";
+      console.log(
+        `${res.surgery_id.padEnd(11)} | ${res.room_id.padEnd(
+          6
+        )} | ${res.start_time.substring(0, 5)}-${res.end_time.substring(
+          0,
+          5
+        )}   | ${score}`
+      );
+    });
+    console.log("==================================================\n");
+
     const totalDuration = Date.now() - globalStart;
     console.log(`[TS-HSO] 🏁 流程結束。總耗時: ${totalDuration}ms`);
-
-    // ✅ 更新最後排程時間
     lastScheduleTime = new Date();
 
     return {
       success: true,
-      message: `排程完成，成功排定 ${pythonResult.results.length} 台手術`,
+      message: `全域重排完成，共處理 ${pythonResult.results.length} 台手術`,
       data: pythonResult.results,
       statistics: pythonResult.statistics,
-      failed_surgeries: pythonResult.failed_surgeries,
       duration: totalDuration,
       timestamp: lastScheduleTime,
     };
   } catch (error) {
     console.error(`[TS-HSO] 排程核心邏輯錯誤: ${error.message}`);
-    throw error; // 拋出錯誤讓呼叫者處理
+    throw error;
   }
+};
+
+let isSchedulerRunning = false;
+
+const runScheduledJob = async (isStartup = false) => {
+  if (isSchedulerRunning) {
+    console.log("[TS-HSO] ⏳ 上次排程未完成，跳過...");
+    return;
+  }
+
+  isSchedulerRunning = true;
+  try {
+    // 1. 啟動時：先維護過期狀態
+    if (isStartup) {
+      await updateExpiredSurgeries();
+    }
+
+    // 2. 執行排程
+    // isStartup = true -> 強制全域重排所有未來手術
+    // isStartup = false -> 只針對有新掛號的日子重排
+    const result = await executeSchedulingLogic(null, isStartup);
+
+    if (result && result.success && result.data && result.data.length > 0) {
+      // 成功時已在 executeSchedulingLogic 內部印出詳細報告
+    }
+  } catch (error) {
+    console.error("[TS-HSO] ❌ 排程服務錯誤:", error.message);
+  } finally {
+    isSchedulerRunning = false;
+  }
+};
+
+export const startPeriodicScheduleService = () => {
+  const INTERVAL_MINUTES = 5;
+
+  console.log(`[TS-HSO] ✅ 排程服務已啟動 (週期: ${INTERVAL_MINUTES}分)`);
+
+  // 設定定期執行 (每 5 分鐘跑一般檢查)
+  setInterval(async () => {
+    await runScheduledJob(false);
+  }, INTERVAL_MINUTES * 60 * 1000);
+
+  // 伺服器啟動時，立即執行一次 (Startup模式：全域重排)
+  // 使用 setTimeout稍微延遲 3 秒，確保 DB 連線池已完全就緒
+  setTimeout(() => {
+    runScheduledJob(true);
+  }, 3000);
 };
 
 /**

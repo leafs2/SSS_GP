@@ -37,6 +37,7 @@ import surgeryRecommendationRouter, {
 } from "./surgeryRecommendationRoutes.js";
 import tshsoSchedulingRouter, {
   setPool as setTshsoSchedulingPool,
+  startPeriodicScheduleService,
 } from "./tshsoScheduling.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -188,4 +189,5 @@ app.listen(PORT, () => {
   console.log(`🚀 API 伺服器運行在 http://localhost:${PORT}`);
   console.log(`🏥 健康檢查: http://localhost:${PORT}/api/health`);
   console.log(`🌍 環境: ${process.env.NODE_ENV || "production"}`);
+  startPeriodicScheduleService();
 });

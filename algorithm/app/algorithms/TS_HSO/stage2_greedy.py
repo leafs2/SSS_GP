@@ -1,24 +1,24 @@
 """
+stage2_greedy.py - 修正版
 第二階段：貪婪演算法時間排程
 """
 
-from datetime import datetime, time, timedelta
-from typing import List, Dict, Optional, Tuple
+from datetime import datetime, time
+from typing import List, Dict, Optional
 import logging
 
 from app.models.scheduling import Surgery, ScheduleResult
 from .fitness import calculate_ahp_score
 from .constraints import (
     find_feasible_time_slots,
-    calculate_shift_occupation,
-    has_capacity
+    calculate_shift_occupation
 )
 
 logger = logging.getLogger(__name__)
 
 
 class Stage2GreedyScheduler:
-    """第二階段：Greedy時間排程"""
+    """第二階段：Greedy時間排程 - 修正版"""
     
     def __init__(self, db_connection):
         self.db = db_connection
@@ -31,17 +31,16 @@ class Stage2GreedyScheduler:
         """
         為手術安排具體時段
         
-        Args:
-            surgeries: 手術列表
-            allocation: 第一階段分配結果
-            
-        Returns:
-            排程結果列表
+        修正重點：
+        1. 正確記錄資源佔用（使用 cleanup_end_time）
+        2. 改進錯誤處理
+        3. 安全處理 allocation_score
         """
         # 計算AHP分數並排序
         surgeries_with_score = []
         for surgery in surgeries:
             if surgery.surgery_id not in allocation:
+                logger.warning(f"手術 {surgery.surgery_id} 未在分配結果中，跳過")
                 continue
                 
             ahp_score = calculate_ahp_score(self.db, surgery)
@@ -50,27 +49,40 @@ class Stage2GreedyScheduler:
         # 按AHP分數排序（高→低）
         surgeries_with_score.sort(key=lambda x: x[1], reverse=True)
         
+        logger.info(f"開始時間排程，共 {len(surgeries_with_score)} 台手術")
+        
         schedule_results = []
         failed_surgeries = []
         
+        # 建立資源佔用追蹤表 (包含醫師、助理、與手術室)
+        current_resource_usage = {
+            'doctor': {},
+            'assistant': {},
+            'room': {} 
+        }
+        
         # 貪婪插入
-        for surgery, ahp_score in surgeries_with_score:
+        for idx, (surgery, ahp_score) in enumerate(surgeries_with_score, 1):
             allocation_info = allocation[surgery.surgery_id]
             room_id = allocation_info['room_id']
             
             try:
-                # 找可行時段
+                # 找可行時段 (傳入即時資源表)
                 feasible_slots = find_feasible_time_slots(
                     self.db,
                     room_id,
                     surgery.surgery_date,
                     surgery.duration,
                     surgery.doctor_id,
-                    surgery.assistant_doctor_id
+                    surgery.assistant_doctor_id,
+                    current_resource_usage=current_resource_usage
                 )
                 
                 if not feasible_slots:
-                    logger.warning(f"手術 {surgery.surgery_id} 無可行時段")
+                    logger.warning(
+                        f"[{idx}/{len(surgeries_with_score)}] "
+                        f"手術 {surgery.surgery_id} 在 {room_id} 無可行時段"
+                    )
                     failed_surgeries.append(surgery)
                     continue
                 
@@ -80,94 +92,95 @@ class Stage2GreedyScheduler:
                     surgery.duration
                 )
                 
+                # [修正] 安全取得 allocation_score
+                allocation_score = allocation_info.get('score', 0.0)
+                
                 # 建立排程結果
                 result = self.create_schedule_result(
                     surgery,
                     room_id,
                     best_slot,
                     ahp_score,
-                    allocation_info['score']
+                    allocation_score
                 )
                 
                 schedule_results.append(result)
                 
-                logger.info(
+                # 更新當前資源佔用表
+                self._update_resource_usage(
+                    current_resource_usage,
+                    surgery,
+                    room_id,
+                    result
+                )
+                
+                logger.debug(
+                    f"[{idx}/{len(surgeries_with_score)}] "
                     f"手術 {surgery.surgery_id} 排程成功: "
                     f"{room_id} {best_slot['start_time']}-{result.end_time}"
                 )
                 
             except Exception as e:
-                logger.error(f"排程手術 {surgery.surgery_id} 失敗: {str(e)}")
+                logger.error(
+                    f"排程手術 {surgery.surgery_id} 失敗: {str(e)}", 
+                    exc_info=True
+                )
                 failed_surgeries.append(surgery)
         
+        # 最終統計
+        logger.info(
+            f"時間排程完成: 成功 {len(schedule_results)} 台, "
+            f"失敗 {len(failed_surgeries)} 台"
+        )
+        
         if failed_surgeries:
-            logger.warning(f"{len(failed_surgeries)} 台手術排程失敗")
+            logger.warning(
+                f"失敗手術ID: {[s.surgery_id for s in failed_surgeries]}"
+            )
         
         return schedule_results
     
-    def find_and_insert(
-        self, 
-        surgery: Surgery, 
-        existing_schedule: List[ScheduleResult]
-    ) -> Optional[ScheduleResult]:
+    def _update_resource_usage(
+        self,
+        current_resource_usage: Dict,
+        surgery: Surgery,
+        room_id: str,
+        result: ScheduleResult
+    ):
         """
-        增量插入單一手術
+        更新資源佔用追蹤表
         
-        Args:
-            surgery: 待插入的手術
-            existing_schedule: 現有排程
-            
-        Returns:
-            排程結果或None
+        修正重點：確保正確記錄 cleanup_end_time
         """
-        # 快速分配手術室（選擇負載最低的）
-        candidate_rooms = self.db.get_available_rooms(
-            surgery.surgery_room_type,
-            surgery.nurse_count,
-            surgery.surgery_date
-        )
+        # 1. 記錄主刀醫師
+        if surgery.doctor_id:
+            if surgery.doctor_id not in current_resource_usage['doctor']:
+                current_resource_usage['doctor'][surgery.doctor_id] = []
+            current_resource_usage['doctor'][surgery.doctor_id].append({
+                'date': surgery.surgery_date,
+                'start_time': result.start_time,
+                'end_time': result.end_time  # 醫師只需到手術結束
+            })
         
-        if not candidate_rooms:
-            return None
+        # 2. 記錄助理醫師
+        if surgery.assistant_doctor_id:
+            if surgery.assistant_doctor_id not in current_resource_usage['assistant']:
+                current_resource_usage['assistant'][surgery.assistant_doctor_id] = []
+            current_resource_usage['assistant'][surgery.assistant_doctor_id].append({
+                'date': surgery.surgery_date,
+                'start_time': result.start_time,
+                'end_time': result.end_time  # 助理也只需到手術結束
+            })
         
-        # 選擇當天手術最少的手術室
-        room_loads = {}
-        for room in candidate_rooms:
-            load = len([
-                s for s in existing_schedule 
-                if s.room_id == room['id'] and s.scheduled_date == surgery.surgery_date
-            ])
-            room_loads[room['id']] = load
-        
-        best_room_id = min(room_loads, key=room_loads.get)
-        
-        # 找可行時段
-        feasible_slots = find_feasible_time_slots(
-            self.db,
-            best_room_id,
-            surgery.surgery_date,
-            surgery.duration,
-            surgery.doctor_id,
-            surgery.assistant_doctor_id
-        )
-        
-        if not feasible_slots:
-            return None
-        
-        # 選擇最早可用時段
-        best_slot = feasible_slots[0]
-        
-        # 建立排程結果
-        ahp_score = calculate_ahp_score(self.db, surgery)
-        result = self.create_schedule_result(
-            surgery,
-            best_room_id,
-            best_slot,
-            ahp_score,
-            0
-        )
-        
-        return result
+        # 3. [關鍵修正] 記錄手術室（必須使用 cleanup_end_time）
+        if room_id not in current_resource_usage['room']:
+            current_resource_usage['room'][room_id] = []
+        current_resource_usage['room'][room_id].append({
+            'date': surgery.surgery_date,
+            'start_time': result.start_time,
+            'end_time': result.cleanup_end_time,  # [修正] 這裡必須用清潔結束時間
+            'cleanup_end_time': result.cleanup_end_time
+        })
     
     def select_best_slot(
         self, 
@@ -178,25 +191,35 @@ class Stage2GreedyScheduler:
         選擇最佳時段
         
         策略：
-        1. 長手術（>4h）優先選擇時段開始位置
-        2. 短手術優先填補碎片時段
-        3. 其他選擇最早可用時段
+        1. 優先選擇早班（08:00-16:00）
+        2. 同一時段內選擇最早的
+        3. 避免跨時段（如果可能）
         """
         if not feasible_slots:
             raise ValueError("沒有可行時段")
         
-        # 長手術：優先時段開始
-        if duration > 4:
-            for slot in feasible_slots:
-                start_hour = slot['start_time'].hour
-                if start_hour in [8, 16]:  # 早班或晚班開始
-                    return slot
+        # 策略 1: 優先選擇早班且不跨時段的
+        morning_slots = [
+            s for s in feasible_slots 
+            if s['start_time'].hour >= 8 
+            and s['start_time'].hour < 16
+            and not s.get('cross_shift', False)
+        ]
         
-        # 短手術：優先填補碎片
-        # （這裡簡化，直接選最早）
-        # 實際應檢查前後是否有手術，計算碎片填補率
+        if morning_slots:
+            return morning_slots[0]  # 最早的早班時段
         
-        return feasible_slots[0]  # 最早可用
+        # 策略 2: 如果沒有完整的早班，選擇不跨時段的
+        non_cross_slots = [
+            s for s in feasible_slots 
+            if not s.get('cross_shift', False)
+        ]
+        
+        if non_cross_slots:
+            return non_cross_slots[0]
+        
+        # 策略 3: 都沒有就選最早的
+        return feasible_slots[0]
     
     def create_schedule_result(
         self,
@@ -220,9 +243,6 @@ class Stage2GreedyScheduler:
         else:
             primary_shift = 'graveyard'
         
-        # 判斷是否跨時段
-        is_cross_shift = slot.get('cross_shift', False)
-        
         return ScheduleResult(
             surgery_id=surgery.surgery_id,
             room_id=room_id,
@@ -231,7 +251,124 @@ class Stage2GreedyScheduler:
             end_time=end_time,
             cleanup_end_time=cleanup_end,
             primary_shift=primary_shift,
-            is_cross_shift=is_cross_shift,
+            is_cross_shift=slot.get('cross_shift', False),
             ahp_score=ahp_score,
             allocation_score=allocation_score
         )
+    
+    def find_and_insert(
+        self, 
+        surgery: Surgery, 
+        existing_schedule: List[ScheduleResult]
+    ) -> Optional[ScheduleResult]:
+        """
+        增量插入單一手術（用於動態新增）
+        
+        應用場景：當有新手術加入時，嘗試插入現有排程
+        """
+        logger.info(f"嘗試插入手術 {surgery.surgery_id}")
+        
+        # 先取得候選手術室
+        from .constraints import get_candidate_rooms
+        
+        candidate_rooms = get_candidate_rooms(
+            self.db,
+            surgery.surgery_room_type,
+            surgery.nurse_count,
+            exclude_emergency=True
+        )
+        
+        if not candidate_rooms:
+            logger.warning(f"手術 {surgery.surgery_id} 無可用手術室")
+            return None
+        
+        # 建立現有排程的資源佔用表
+        current_resource_usage = self._build_resource_usage_from_schedule(
+            existing_schedule,
+            surgery.surgery_date
+        )
+        
+        # 嘗試每個候選手術室
+        best_result = None
+        best_score = -float('inf')
+        
+        for room in candidate_rooms:
+            room_id = room['id']
+            
+            # 找可行時段
+            feasible_slots = find_feasible_time_slots(
+                self.db,
+                room_id,
+                surgery.surgery_date,
+                surgery.duration,
+                surgery.doctor_id,
+                surgery.assistant_doctor_id,
+                current_resource_usage=current_resource_usage
+            )
+            
+            if not feasible_slots:
+                continue
+            
+            # 選擇最佳時段
+            best_slot = self.select_best_slot(feasible_slots, surgery.duration)
+            
+            # 計算分數
+            ahp_score = calculate_ahp_score(self.db, surgery)
+            
+            # 簡化的分配分數（可以改用更複雜的評估）
+            allocation_score = len(feasible_slots) * 10  # 可行時段越多分數越高
+            
+            if allocation_score > best_score:
+                best_score = allocation_score
+                best_result = self.create_schedule_result(
+                    surgery,
+                    room_id,
+                    best_slot,
+                    ahp_score,
+                    allocation_score
+                )
+        
+        if best_result:
+            logger.info(
+                f"成功插入手術 {surgery.surgery_id} 到 "
+                f"{best_result.room_id} {best_result.start_time}"
+            )
+        else:
+            logger.warning(f"無法插入手術 {surgery.surgery_id}")
+        
+        return best_result
+    
+    def _build_resource_usage_from_schedule(
+        self,
+        existing_schedule: List[ScheduleResult],
+        target_date
+    ) -> Dict:
+        """
+        從現有排程建立資源佔用表
+        """
+        resource_usage = {
+            'doctor': {},
+            'assistant': {},
+            'room': {}
+        }
+        
+        # 只考慮目標日期的排程
+        for result in existing_schedule:
+            if result.scheduled_date != target_date:
+                continue
+            
+            # 需要從資料庫查詢手術詳情以取得醫師資訊
+            # 這裡簡化處理，實際應該查詢資料庫
+            room_id = result.room_id
+            
+            if room_id not in resource_usage['room']:
+                resource_usage['room'][room_id] = []
+            
+            resource_usage['room'][room_id].append({
+                'date': result.scheduled_date,
+                'start_time': result.start_time,
+                'end_time': result.cleanup_end_time,  # 使用清潔結束時間
+                'cleanup_end_time': result.cleanup_end_time
+            })
+        
+        return resource_usage
