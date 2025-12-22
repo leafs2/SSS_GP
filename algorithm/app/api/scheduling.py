@@ -54,6 +54,7 @@ class SchedulingRequest(BaseModel):
     surgeries: List[SurgeryInput]
     available_rooms: List[RoomInfo]
     existing_schedules: Optional[List[ExistingSchedule]] = []
+    doctor_schedules: Optional[Dict[str, Dict[str, str]]] = {}
     config: Optional[Dict] = {}
 
 
@@ -128,7 +129,8 @@ async def trigger_scheduling(request: SchedulingRequest):
         scheduler = StandaloneScheduler(
             available_rooms=available_rooms,
             existing_schedules=existing_schedules,
-            config=request.config
+            config=request.config,
+            doctor_schedules=request.doctor_schedules
         )
         
         # 執行排程

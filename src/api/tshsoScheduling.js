@@ -153,6 +153,41 @@ const executeSchedulingLogic = async (
       ORDER BY id
     `);
 
+    const doctorSchedulesQuery = `
+      SELECT 
+        ds.employee_id,
+        ds.monday, ds.tuesday, ds.wednesday, ds.thursday,
+        ds.friday, ds.saturday, ds.sunday
+      FROM doctor_schedule ds
+      WHERE ds.employee_id IN (
+        SELECT DISTINCT doctor_id FROM surgery 
+        WHERE surgery_date = ANY($1::date[])
+        AND status IN ('pending', 'scheduled')
+      )
+    `;
+
+    const doctorSchedulesResult = await pool.query(doctorSchedulesQuery, [
+      targetDates,
+    ]);
+
+    // 轉換為 Python 可用的格式
+    const doctorSchedules = {};
+    doctorSchedulesResult.rows.forEach((row) => {
+      doctorSchedules[row.employee_id] = {
+        monday: row.monday,
+        tuesday: row.tuesday,
+        wednesday: row.wednesday,
+        thursday: row.thursday,
+        friday: row.friday,
+        saturday: row.saturday,
+        sunday: row.sunday,
+      };
+    });
+
+    console.log(
+      `[TS-HSO] 讀取 ${Object.keys(doctorSchedules).length} 位醫師的排班資料`
+    );
+
     // --- Step 3: 資料序列化 ---
     const serializedSurgeries = allSurgeries.map((s) => ({
       surgery_id: s.surgery_id,
@@ -190,7 +225,8 @@ const executeSchedulingLogic = async (
         body: JSON.stringify({
           surgeries: serializedSurgeries,
           available_rooms: serializedRooms,
-          existing_schedules: [], // 傳空陣列，強制全域重排
+          existing_schedules: [],
+          doctor_schedules: doctorSchedules,
           config: {
             mode: "global_rescheduling",
             ga_generations: 100,

@@ -242,20 +242,133 @@ const SurgerySchedule = () => {
   // === 統計 ===
   const calculateStats = () => {
     if (!selectedCategory || !scheduleData[selectedCategory]) {
-      return { totalSurgeries: 0, confirmedSurgeries: 0, utilizationRate: 0 };
+      return { 
+        totalSurgeries: 0, 
+        confirmedSurgeries: 0, 
+        utilizationRate: 0,
+        totalUsedHours: 0,
+        totalCapacityHours: 0,
+        overtimeSurgeries: 0  // 新增：超時手術數
+      };
     }
+    
     let totalSurgeries = 0;
     let confirmedSurgeries = 0;
+    let totalUsedHours = 0;
+    let overtimeSurgeries = 0;  // 統計超時手術
+    
     const roomSchedules = scheduleData[selectedCategory];
-    Object.values(roomSchedules).forEach(roomData => {
-      Object.values(roomData).forEach(daySurgeries => {
-        totalSurgeries += daySurgeries.length;
-        confirmedSurgeries += daySurgeries.filter(s => ['confirmed', 'ongoing'].includes(s.status)).length;
+    const weekDates = getWeekDates(currentWeek);
+    const roomCount = roomsData[selectedCategory]?.length || 0;
+    
+    // 遍歷每間手術室的每一天
+    Object.keys(roomSchedules).forEach(roomId => {
+      weekDates.forEach(date => {
+        const dateKey = toLocalISODate(date);
+        const daySurgeries = roomSchedules[roomId]?.[dateKey] || [];
+        
+        daySurgeries.forEach(surgery => {
+          totalSurgeries++;
+          
+          // 統計已確認手術
+          if (['confirmed', 'ongoing'].includes(surgery.status)) {
+            confirmedSurgeries++;
+          }
+          
+          // 計算手術時長
+          const [startH, startM] = surgery.startTime.split(':').map(Number);
+          const [endH, endM] = surgery.endTime.split(':').map(Number);
+          const duration = (endH + endM/60) - (startH + startM/60);
+          
+          // 累加使用時數（含清潔）
+          totalUsedHours += duration + 0.5;
+          
+          // 檢查是否超時（結束時間 >= 16:00）
+          if (endH > 16 || (endH === 16 && endM > 0)) {
+            overtimeSurgeries++;
+          }
+        });
       });
     });
-    const totalSlots = (roomsData[selectedCategory]?.length || 0) * 6;
-    const utilizationRate = totalSlots > 0 ? Math.round((totalSurgeries / totalSlots) * 100) : 0;
-    return { totalSurgeries, confirmedSurgeries, utilizationRate };
+    
+    // ✅ 修改：統一以早班 8 小時計算
+    // 總容量 = 手術室數 × 天數 × 每天8小時
+    const totalCapacityHours = roomCount * 6 * 8;
+    
+    // 計算使用率
+    const utilizationRate = totalCapacityHours > 0 
+      ? Math.round((totalUsedHours / totalCapacityHours) * 100) 
+      : 0;
+    
+    return { 
+      totalSurgeries, 
+      confirmedSurgeries, 
+      utilizationRate,
+      totalUsedHours: totalUsedHours,
+      totalCapacityHours: totalCapacityHours,
+      overtimeSurgeries: overtimeSurgeries  // 回傳超時手術數
+    };
+  };
+
+  // === 計算每日類別使用率 ===
+  const calculateDailyUtilization = (category, dateStr) => {
+    if (!scheduleData[category]) return 0;
+    
+    const rooms = roomsData[category] || [];
+    let totalUsedHours = 0;
+    let totalCapacityHours = 0;
+    
+    rooms.forEach(room => {
+      const daySurgeries = scheduleData[category]?.[room.id]?.[dateStr] || [];
+      
+      // 計算該手術室當天已用時數
+      const usedHours = daySurgeries.reduce((sum, surgery) => {
+        // 計算手術時長（從時間字串）
+        const [startH, startM] = surgery.startTime.split(':').map(Number);
+        const [endH, endM] = surgery.endTime.split(':').map(Number);
+        const duration = (endH + endM/60) - (startH + startM/60);
+        
+        // 加上清潔時間 0.5 小時
+        return sum + duration + 0.5;
+      }, 0);
+      
+      totalUsedHours += usedHours;
+      
+      // ✅ 修改：每間手術室的日容量統一為 8 小時（早班）
+      totalCapacityHours += 8;
+    });
+    
+    if (totalCapacityHours === 0) return 0;
+    
+    const utilization = (totalUsedHours / totalCapacityHours) * 100;
+    return Math.round(utilization);
+  };
+
+  // 取得使用率顏色樣式
+  const getUtilizationColorClass = (rate) => {
+    if (rate >= 90) return 'text-red-600 bg-red-50 border-red-200';
+    if (rate >= 70) return 'text-orange-600 bg-orange-50 border-orange-200';
+    if (rate >= 50) return 'text-blue-600 bg-blue-50 border-blue-200';
+    return 'text-green-600 bg-green-50 border-green-200';
+  };
+
+  // === 判斷手術是否超時（結束時間 >= 16:00）===
+  const isOvertimeSurgery = (endTime) => {
+    const [endH, endM] = endTime.split(':').map(Number);
+    return endH > 16 || (endH === 16 && endM > 0);
+  };
+
+  // === 取得手術樣式（包含超時標示）===
+  const getSurgeryStyle = (surgery) => {
+    const baseStyle = getStatusStyle(surgery.status);
+    const isOvertime = isOvertimeSurgery(surgery.endTime);
+    
+    if (isOvertime) {
+      // 超時手術：保持原邊框顏色，但背景改為橘紅漸層
+      return `${baseStyle} bg-gradient-to-r from-orange-100 to-red-100`;
+    }
+    
+    return baseStyle;
   };
 
   // === 載入待排程清單 ===
@@ -344,19 +457,22 @@ const SurgerySchedule = () => {
                   </div>
                   <div className="text-2xl font-bold text-blue-700">{stats.totalSurgeries}</div>
                 </div>
-                <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 w-28">
+                <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-2 w-28">
                   <div className="flex items-center gap-2 mb-1">
-                    <CheckCircle className="w-4 h-4 text-green-600" />
-                    <span className="text-xs font-medium text-green-700">已確認</span>
+                    <Activity className="w-4 h-4 text-indigo-600" />
+                    <span className="text-xs font-medium text-indigo-700">週平均</span>
                   </div>
-                  <div className="text-2xl font-bold text-green-700">{stats.confirmedSurgeries}</div>
-                </div>
-                <div className="bg-purple-50 border border-purple-200 rounded-lg px-4 py-2 w-28">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Activity className="w-4 h-4 text-purple-600" />
-                    <span className="text-xs font-medium text-purple-700">使用率</span>
+                  <div className="text-2xl font-bold text-indigo-700">
+                    {(() => {
+                      const weekDates = getWeekDates(currentWeek);
+                      let totalUtil = 0;
+                      weekDates.forEach(date => {
+                        const dateKey = toLocalISODate(date);
+                        totalUtil += calculateDailyUtilization(selectedCategory, dateKey);
+                      });
+                      return Math.round(totalUtil / weekDates.length);
+                    })()}%
                   </div>
-                  <div className="text-2xl font-bold text-purple-700">{stats.utilizationRate}%</div>
                 </div>
               </div>
             </div>
@@ -428,13 +544,21 @@ const SurgerySchedule = () => {
                   <tr className="bg-gray-50 border-b-2 border-gray-200">
                     <th className="px-4 py-3 text-center font-semibold text-gray-700 border-r border-gray-200" style={{width: '100px'}}>手術室</th>
                     {weekDates.map((date, index) => {
-                       const isToday = toLocalISODate(date) === toLocalISODate(new Date());
-                       return (
-                        <th key={index} className={`px-2 py-3 text-center font-semibold border-r border-gray-200 ${isToday ? 'bg-blue-50' : ''}`} style={{width: '16%'}}>
+                      const isToday = toLocalISODate(date) === toLocalISODate(new Date());
+                      const dateKey = toLocalISODate(date);
+                      const utilization = calculateDailyUtilization(selectedCategory, dateKey);
+                      const colorClass = getUtilizationColorClass(utilization);
+                      
+                      return (
+                        <th key={index} className={`px-2 py-2 text-center font-semibold border-r border-gray-200 ${isToday ? 'bg-blue-50' : ''}`} style={{width: '16%'}}>
                             <div className="text-gray-800">{formatWeekday(date)}</div>
-                            <div className="text-sm font-normal text-gray-500">{formatDate(date)}</div>
+                            <div className="text-sm font-normal text-gray-500 mb-1">{formatDate(date)}</div>
+                            {/* 使用率顯示 */}
+                            <div className={`inline-block px-2 py-0.5 rounded-md text-xs font-semibold border ${colorClass}`}>
+                              使用率 {utilization}%
+                            </div>
                         </th>
-                       )
+                      )
                     })}
                   </tr>
                 </thead>
@@ -453,26 +577,38 @@ const SurgerySchedule = () => {
                               {daySurgeries.length === 0 ? (
                                 <div className="text-center text-gray-300 text-sm py-4">-</div>
                               ) : (
-                                daySurgeries.map((surgery) => (
-                                  <div
-                                    key={surgery.id}
-                                    className={`
-                                      p-2 rounded border-l-4 text-xs mb-1 shadow-sm
-                                      ${getStatusStyle(surgery.status)}
-                                    `}
-                                  >
-                                    <div className="flex justify-between items-center mb-1 text-left">
-                                       <span className="font-bold whitespace-nowrap">
-                                         {surgery.startTime}-{surgery.endTime}
-                                       </span>
+                                daySurgeries.map((surgery) => {
+                                  const isOvertime = isOvertimeSurgery(surgery.endTime);
+                                  
+                                  return (
+                                    <div
+                                      key={surgery.id}
+                                      className={`
+                                        p-2 rounded border-l-4 text-xs mb-1 shadow-sm relative
+                                        ${getSurgeryStyle(surgery)}
+                                      `}
+                                    >
+                                      {/* 超時標記 */}
+                                      {/* {isOvertime && (
+                                        <div className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow-md flex items-center gap-0.5">
+                                          <Clock className="w-2.5 h-2.5" />
+                                          <span>超時</span>
+                                        </div>
+                                      )} */}
+                                      
+                                      <div className="flex justify-between items-center mb-1 text-left">
+                                        <span className="font-bold whitespace-nowrap">
+                                          {surgery.startTime}-{surgery.endTime}
+                                        </span>
+                                      </div>
+                                      <div className="truncate text-left items-baseline" title={`${surgery.doctor} 醫師 - ${surgery.name}`}>
+                                        <span className="font-bold text-sm text-gray-900">{surgery.doctor}</span>
+                                        <span className="text-gray-400 mr-1">-</span>
+                                        <span className="text-gray-700 font-medium">{surgery.name}</span>
+                                      </div>
                                     </div>
-                                    <div className="truncate text-left items-baseline" title={`${surgery.doctor} 醫師 - ${surgery.name}`}>
-                                      <span className="font-bold text-sm text-gray-900">{surgery.doctor}</span>
-                                      <span className="text-gray-400 mr-1">-</span>
-                                      <span className="text-gray-700 font-medium">{surgery.name}</span>
-                                    </div>
-                                  </div>
-                                ))
+                                  );
+                                })
                               )}
                             </div>
                           </td>
@@ -492,6 +628,11 @@ const SurgerySchedule = () => {
                 <div className="flex items-center gap-2"><div className="w-3 h-3 bg-blue-50 border border-blue-500 rounded"></div><span className="text-gray-600">已確認</span></div>
                 <div className="flex items-center gap-2"><div className="w-3 h-3 bg-yellow-50 border border-yellow-500 rounded"></div><span className="text-gray-600">暫定</span></div>
                 <div className="flex items-center gap-2"><div className="w-3 h-3 bg-gray-100 border border-gray-400 rounded"></div><span className="text-gray-600">已完成</span></div>
+                <div className="flex items-center gap-2 ml-4 border-l border-gray-300 pl-4">
+                  <div className="w-3 h-3 bg-gradient-to-r from-orange-100 to-red-100 border border-yellow-500 rounded"></div>
+                  <span className="text-gray-600">超時排程</span>
+                  <span className="text-xs text-gray-400">(結束時間 ≥ 16:00)</span>
+                </div>
               </div>
             </div>
           </div>

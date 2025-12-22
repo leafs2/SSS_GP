@@ -1,6 +1,6 @@
 """
-scheduler_standalone.py - 整合完整 TS-HSO 演算法版本（Console 輸出版）
-獨立排程器 - 整合 GA + Greedy + AHP
+scheduler_standalone.py - 整合完整 TS-HSO 演算法版本（含護士與醫師時段限制）
+獨立排程器 - 整合 GA + Greedy + AHP + 護士人數檢查 + 醫師時段檢查
 """
 
 from typing import List, Dict, Optional, Tuple
@@ -15,14 +15,14 @@ from app.models.scheduling import Surgery, ScheduleResult
 logging.basicConfig(
     level=logging.INFO,
     format='[%(levelname)s] %(message)s',
-    force=True  # 強制重新配置
+    force=True
 )
 logger = logging.getLogger(__name__)
 
 
 def log_and_print(message: str, level: str = 'info'):
     """同時使用 logger 和 print 輸出"""
-    print(f"[TS-HSO] {message}")  # 確保在 console 顯示
+    print(f"[TS-HSO] {message}")
     if level == 'info':
         logger.info(message)
     elif level == 'warning':
@@ -36,20 +36,31 @@ class StandaloneScheduler:
     獨立排程器 - 整合完整 TS-HSO 兩階段演算法
     
     架構：
-    1. Stage 1: GA 手術室分配 (內部實現)
-    2. Stage 2: Greedy + AHP 時間排程 (內部實現)
+    1. Stage 1: GA 手術室分配 (含護士人數檢查)
+    2. Stage 2: Greedy + AHP 時間排程 (含醫師時段檢查)
     """
     
     def __init__(
         self,
         available_rooms: List[Dict],
         existing_schedules: List[Dict] = None,
-        config: Dict = None
+        config: Dict = None,
+        doctor_schedules: Dict[str, Dict[str, str]] = None  # 新增：醫師排班資料
     ):
-        """初始化排程器"""
+        """
+        初始化排程器
+        
+        Args:
+            available_rooms: 可用手術室列表
+            existing_schedules: 現有排程
+            config: 配置參數
+            doctor_schedules: 醫師排班資料 {employee_id: {weekday: type}}
+                例如: {"D001": {"monday": "A", "tuesday": "B", ...}}
+        """
         self.available_rooms = {room['id']: room for room in available_rooms}
         self.existing_schedules = existing_schedules or []
         self.config = config or {}
+        self.doctor_schedules = doctor_schedules or {}
         
         # GA 參數
         self.POPULATION_SIZE = self.config.get('ga_population', 50)
@@ -65,6 +76,15 @@ class StandaloneScheduler:
         self.ahp_doctor_weight = ahp_weights.get('doctor', 0.2)
         self.ahp_waiting_weight = ahp_weights.get('waiting', 0.1)
         
+        # 醫師時段類型定義
+        self.DOCTOR_SCHEDULE_TYPES = {
+            'A': {'name': '手術日', 'available_shifts': ['morning', 'night'], 'duration': 8.0},
+            'B': {'name': '上午門診', 'available_shifts': ['night'], 'duration': 4.0},
+            'C': {'name': '下午門診', 'available_shifts': ['morning'], 'duration': 4.0},
+            'D': {'name': '全天門診', 'available_shifts': [], 'duration': 0.0},
+            'E': {'name': '休假', 'available_shifts': [], 'duration': 0.0}
+        }
+        
         log_and_print(f"初始化排程器: GA世代={self.GENERATIONS}, 族群={self.POPULATION_SIZE}")
     
     def schedule(self, surgeries: List[Surgery]) -> Tuple[List[ScheduleResult], List[Surgery]]:
@@ -72,8 +92,8 @@ class StandaloneScheduler:
         執行完整排程
         
         流程：
-        1. Stage 1: GA 手術室分配
-        2. Stage 2: Greedy + AHP 時間排程
+        1. Stage 1: GA 手術室分配（含護士人數檢查）
+        2. Stage 2: Greedy + AHP 時間排程（含醫師時段檢查）
         """
         if not surgeries:
             return [], []
@@ -83,14 +103,14 @@ class StandaloneScheduler:
         print("="*60)
         
         # ===== Stage 1: GA 手術室分配 =====
-        print("\n[Stage 1] 開始 GA 手術室分配...")
+        print("\n[Stage 1] 開始 GA 手術室分配（含護士人數檢查）...")
         allocation = self._stage1_ga_allocation(surgeries)
         
         used_rooms = len(set(alloc['room_id'] for alloc in allocation.values()))
         print(f"[Stage 1] 完成，使用 {used_rooms} 間手術室")
         
         # ===== Stage 2: Greedy + AHP 時間排程 =====
-        print("\n[Stage 2] 開始 Greedy + AHP 時間排程...")
+        print("\n[Stage 2] 開始 Greedy + AHP 時間排程（含醫師時段檢查）...")
         results, failed = self._stage2_greedy_scheduling(surgeries, allocation)
         
         print(f"[Stage 2] 完成：成功 {len(results)} 台，失敗 {len(failed)} 台")
@@ -98,47 +118,170 @@ class StandaloneScheduler:
         
         return results, failed
     
+    # ==================== 新增：護士人數檢查 ====================
+    
+    def _check_nurse_requirement(self, room: Dict, surgery: Surgery) -> bool:
+        """
+        檢查手術室護士人數是否符合手術需求
+        
+        Args:
+            room: 手術室資料
+            surgery: 手術資料
+            
+        Returns:
+            True if 手術室護士數 >= 手術所需護士數
+        """
+        room_nurse_count = room.get('nurse_count', 0)
+        required_nurse_count = surgery.nurse_count
+        
+        return room_nurse_count >= required_nurse_count
+    
+    # ==================== 新增：醫師時段檢查 ====================
+    
+    def _get_doctor_schedule_type(self, doctor_id: str, surgery_date: date) -> Optional[str]:
+        """
+        取得醫師在指定日期的排班類型
+        
+        Args:
+            doctor_id: 醫師 ID
+            surgery_date: 手術日期
+            
+        Returns:
+            排班類型 ('A', 'B', 'C', 'D', 'E') 或 None
+        """
+        if doctor_id not in self.doctor_schedules:
+            print(f"    ⚠️  找不到醫師 {doctor_id} 的排班資料，預設為手術日 (A)")
+            return 'A'  # 預設為手術日
+        
+        # 將日期轉換為星期
+        weekday_map = {
+            0: 'monday',
+            1: 'tuesday',
+            2: 'wednesday',
+            3: 'thursday',
+            4: 'friday',
+            5: 'saturday',
+            6: 'sunday'
+        }
+        
+        weekday = weekday_map.get(surgery_date.weekday())
+        schedule = self.doctor_schedules[doctor_id]
+        schedule_type = schedule.get(weekday)
+        
+        return schedule_type
+    
+    def _get_available_shifts_for_doctor(
+        self, 
+        doctor_id: str, 
+        surgery_date: date
+    ) -> List[str]:
+        """
+        取得醫師在指定日期可用的時段
+        
+        Args:
+            doctor_id: 醫師 ID
+            surgery_date: 手術日期
+            
+        Returns:
+            可用時段列表 ['morning', 'night'] 或 []
+        """
+        schedule_type = self._get_doctor_schedule_type(doctor_id, surgery_date)
+        
+        if not schedule_type:
+            return ['morning', 'night']  # 預設兩個時段都可用
+        
+        schedule_info = self.DOCTOR_SCHEDULE_TYPES.get(schedule_type, {})
+        available_shifts = schedule_info.get('available_shifts', [])
+        
+        return available_shifts
+    
+    def _is_doctor_available_at_time(
+        self,
+        doctor_id: str,
+        surgery_date: date,
+        start_time: time,
+        end_time: time
+    ) -> bool:
+        """
+        檢查醫師在指定時間是否可用
+        
+        Args:
+            doctor_id: 醫師 ID
+            surgery_date: 手術日期
+            start_time: 手術開始時間
+            end_time: 手術結束時間
+            
+        Returns:
+            True if 醫師可用
+        """
+        available_shifts = self._get_available_shifts_for_doctor(doctor_id, surgery_date)
+        
+        # 如果沒有可用時段（全天門診或休假），直接返回 False
+        if not available_shifts:
+            return False
+        
+        # 判斷手術時段
+        start_hour = start_time.hour
+        end_hour = end_time.hour
+        
+        # 早班：8:00-16:00
+        if 8 <= start_hour < 16:
+            surgery_shift = 'morning'
+        # 晚班：16:00-24:00
+        elif 16 <= start_hour < 24:
+            surgery_shift = 'night'
+        else:
+            surgery_shift = 'graveyard'
+        
+        # 檢查手術時段是否在可用時段內
+        if surgery_shift not in available_shifts:
+            return False
+        
+        # 如果手術跨時段，需要兩個時段都可用
+        if start_hour < 16 and end_hour >= 16:
+            return 'morning' in available_shifts and 'night' in available_shifts
+        
+        return True
+    
     # ==================== Stage 1: GA 手術室分配 ====================
     
     def _stage1_ga_allocation(self, surgeries: List[Surgery]) -> Dict[str, Dict]:
         """
-        Stage 1: 基因演算法手術室分配
+        Stage 1: 基因演算法手術室分配（含護士人數檢查）
         
         步驟：
         1. 建構啟發式初始解
         2. GA 優化 (選擇、交叉、突變)
         3. 返回最佳分配方案
         """
-        # 1. 建構啟發式初始解
         print("  建構啟發式初始解...")
         initial_solution = self._constructive_heuristic(surgeries)
         
-        # 2. GA 優化
         print(f"  執行 GA 優化 ({self.GENERATIONS} 世代)...")
         optimized_solution = self._genetic_algorithm(surgeries, initial_solution)
         
         return optimized_solution
     
     def _constructive_heuristic(self, surgeries: List[Surgery]) -> Dict[str, Dict]:
-        """建構啟發式：Round-Robin 負載平衡"""
+        """建構啟發式：Round-Robin 負載平衡（含護士人數檢查）"""
         allocation = {}
         sorted_surgeries = sorted(surgeries, key=lambda s: s.duration)
         
-        # 收集各類型手術室
         room_pools = {}
         for surgery in sorted_surgeries:
             room_type = surgery.surgery_room_type
             
             if room_type not in room_pools:
+                # [修正] 篩選護士人數足夠的手術室
                 candidate_rooms = [
                     room for room in self.available_rooms.values()
                     if room['room_type'] == room_type
-                    and room['nurse_count'] >= surgery.nurse_count
+                    and self._check_nurse_requirement(room, surgery)  # 新增護士檢查
                 ]
                 room_pools[room_type] = candidate_rooms
             
             if not room_pools[room_type]:
-                print(f"    ⚠️  手術 {surgery.surgery_id} 找不到合適手術室")
+                print(f"    ⚠️  手術 {surgery.surgery_id} 找不到護士人數足夠的手術室（需要 {surgery.nurse_count} 人）")
                 continue
             
             # Round-Robin: 選擇負載最低的手術室
@@ -162,7 +305,6 @@ class StandaloneScheduler:
         used_rooms = len(set(a['room_id'] for a in allocation.values()))
         print(f"    ✓ 初始解：使用 {used_rooms} 間手術室")
         
-        # 顯示每間手術室的負載
         room_loads_summary = {}
         for s_id, alloc in allocation.items():
             room_id = alloc['room_id']
@@ -181,7 +323,6 @@ class StandaloneScheduler:
     ) -> Dict[str, Dict]:
         """基因演算法優化"""
         
-        # 初始化族群
         population = self._initialize_population(surgeries, initial_solution)
         
         best_solution = None
@@ -189,13 +330,11 @@ class StandaloneScheduler:
         no_improvement = 0
         
         for generation in range(self.GENERATIONS):
-            # 計算適應度
             fitness_scores = [
                 self._calculate_fitness(individual, surgeries)
                 for individual in population
             ]
             
-            # 更新最佳解
             gen_best_idx = np.argmax(fitness_scores)
             if fitness_scores[gen_best_idx] > best_fitness:
                 best_fitness = fitness_scores[gen_best_idx]
@@ -208,32 +347,23 @@ class StandaloneScheduler:
             else:
                 no_improvement += 1
             
-            # 早停
             if no_improvement >= 20:
                 print(f"    ✓ 提前結束於世代 {generation+1}")
                 break
             
-            # 選擇
             selected = self._selection(population, fitness_scores)
-            
-            # 交叉
             offspring = self._crossover(selected, surgeries)
-            
-            # 突變
             offspring = self._mutation(offspring, surgeries)
             
-            # 菁英保留
             elite_size = int(self.POPULATION_SIZE * self.ELITISM_RATE)
             elite_indices = np.argsort(fitness_scores)[-elite_size:]
             elite = [population[i] for i in elite_indices]
             
-            # 新族群
             population = elite + offspring[:self.POPULATION_SIZE - elite_size]
         
         used_rooms = len(set(a['room_id'] for a in best_solution.values()))
         print(f"    ✓ GA完成：最佳適應度={best_fitness:.2f}, 使用手術室={used_rooms}")
         
-        # 顯示最終分配
         room_loads_summary = {}
         for s_id, alloc in best_solution.items():
             room_id = alloc['room_id']
@@ -247,42 +377,30 @@ class StandaloneScheduler:
         return best_solution
     
     def _calculate_fitness(self, allocation: Dict, surgeries: List[Surgery]) -> float:
-        """
-        計算適應度（整合完整演算法）
+        """計算適應度"""
+        room_usage = {}
         
-        考慮因素：
-        1. 手術室利用率
-        2. 負載平衡
-        3. 超時懲罰
-        4. 手術室數量
-        """
-        room_usage = {}  # {room_id: total_hours}
-        
-        # 計算每間手術室的總工時
         for surgery_id, alloc in allocation.items():
             room_id = alloc['room_id']
             surgery = next((s for s in surgeries if s.surgery_id == surgery_id), None)
             if surgery:
-                duration_hours = surgery.duration + 0.5  # 含清潔
+                duration_hours = surgery.duration + 0.5
                 room_usage[room_id] = room_usage.get(room_id, 0) + duration_hours
         
         if not room_usage:
             return 0
         
-        # 1. 計算理想手術室數量
         IDEAL_HOURS_PER_ROOM = 8.0
         total_hours = sum(room_usage.values())
         ideal_room_count = max(1, int(total_hours / IDEAL_HOURS_PER_ROOM) + 1)
         actual_room_count = len(room_usage)
         
-        # 2. 利用率分數
         if actual_room_count < ideal_room_count:
             utilization_score = actual_room_count / ideal_room_count * 0.5
         else:
             total_capacity = actual_room_count * IDEAL_HOURS_PER_ROOM
             utilization_score = min(1.0, total_hours / total_capacity)
         
-        # 3. 負載平衡分數
         usage_values = list(room_usage.values())
         if len(usage_values) > 1:
             avg = sum(usage_values) / len(usage_values)
@@ -292,18 +410,15 @@ class StandaloneScheduler:
         else:
             balance_score = 0.5
         
-        # 4. 超時懲罰
         overtime_penalty = 0
         for hours in room_usage.values():
             if hours > IDEAL_HOURS_PER_ROOM:
                 excess = hours - IDEAL_HOURS_PER_ROOM
                 overtime_penalty += (excess ** 1.5)
         
-        # 5. 手術室數量分數
         room_count_score = 1.0 - abs(actual_room_count - ideal_room_count) / max(ideal_room_count, 1) * 0.5
         room_count_score = max(0, room_count_score)
         
-        # 6. 總分
         weights = {
             'utilization': 0.25,
             'balance': 0.25,
@@ -329,19 +444,18 @@ class StandaloneScheduler:
         """初始化族群"""
         population = [initial_solution]
         
-        # 收集所有可用手術室
         room_pools = {}
         for surgery in surgeries:
             room_type = surgery.surgery_room_type
             if room_type not in room_pools:
+                # [修正] 包含護士人數檢查
                 candidates = [
                     room for room in self.available_rooms.values()
                     if room['room_type'] == room_type
-                    and room['nurse_count'] >= surgery.nurse_count
+                    and self._check_nurse_requirement(room, surgery)
                 ]
                 room_pools[room_type] = candidates
         
-        # 產生隨機個體
         for _ in range(self.POPULATION_SIZE - 1):
             individual = {}
             for surgery in surgeries:
@@ -403,14 +517,14 @@ class StandaloneScheduler:
         for individual in population:
             for surgery in surgeries:
                 if random.random() < self.MUTATION_RATE:
+                    # [修正] 包含護士人數檢查
                     candidates = [
                         room for room in self.available_rooms.values()
                         if room['room_type'] == surgery.surgery_room_type
-                        and room['nurse_count'] >= surgery.nurse_count
+                        and self._check_nurse_requirement(room, surgery)
                     ]
                     
                     if candidates:
-                        # 50% 選最低負載，50% 隨機
                         if random.random() < 0.5:
                             room_loads = {
                                 room['id']: sum(1 for s_id, a in individual.items() if a['room_id'] == room['id'])
@@ -436,14 +550,8 @@ class StandaloneScheduler:
         allocation: Dict[str, Dict]
     ) -> Tuple[List[ScheduleResult], List[Surgery]]:
         """
-        Stage 2: Greedy + AHP 時間排程
-        
-        步驟：
-        1. 計算 AHP 分數並排序
-        2. Greedy 插入（優先級高→低）
-        3. 即時資源衝突檢測
+        Stage 2: Greedy + AHP 時間排程（含醫師時段檢查）
         """
-        # 1. 計算 AHP 分數並排序
         surgeries_with_score = []
         for surgery in surgeries:
             if surgery.surgery_id not in allocation:
@@ -456,7 +564,6 @@ class StandaloneScheduler:
         surgeries_with_score.sort(key=lambda x: x[1], reverse=True)
         print(f"  ✓ AHP 排序完成，待排程 {len(surgeries_with_score)} 台")
         
-        # 2. Greedy 插入
         results = []
         failed = []
         current_resource_usage = {'doctor': {}, 'assistant': {}, 'room': {}}
@@ -464,7 +571,7 @@ class StandaloneScheduler:
         for idx, (surgery, ahp_score) in enumerate(surgeries_with_score, 1):
             room_id = allocation[surgery.surgery_id]['room_id']
             
-            # 找可行時段
+            # [修正] 傳入醫師資訊以進行時段檢查
             feasible_slot = self._find_feasible_slot(
                 surgery, room_id, current_resource_usage
             )
@@ -489,7 +596,7 @@ class StandaloneScheduler:
                 if (idx) % 10 == 0:
                     print(f"    進度: {idx}/{len(surgeries_with_score)}")
             else:
-                print(f"  ⚠️  手術 {surgery.surgery_id} 無可行時段")
+                print(f"  ⚠️  手術 {surgery.surgery_id} 無可行時段（可能醫師時段衝突）")
                 failed.append(surgery)
         
         return results, failed
@@ -522,12 +629,7 @@ class StandaloneScheduler:
         current_resource_usage: Dict
     ) -> Optional[Dict]:
         """
-        找可行時段
-        
-        優先策略：
-        1. 早班（08:00-16:00）
-        2. 不跨時段
-        3. 最早可用
+        找可行時段（含醫師時段檢查）
         """
         start_hour, end_hour = 8, 20
         
@@ -541,13 +643,13 @@ class StandaloneScheduler:
                 end_time = end_dt.time()
                 cleanup_end = cleanup_dt.time()
                 
+                # [修正] 加入醫師時段檢查
                 if self._is_slot_available(
                     surgery, room_id, start_time, end_time, cleanup_end, current_resource_usage
                 ):
                     shift = self._get_shift(start_time)
                     is_cross = self._is_cross_shift(start_time, end_time)
                     
-                    # 優先選擇早班且不跨時段
                     if 8 <= hour < 16 and not is_cross:
                         return {
                             'start_time': start_time,
@@ -557,7 +659,6 @@ class StandaloneScheduler:
                             'is_cross': is_cross
                         }
         
-        # 如果沒有完美時段，再找一次任意可行時段
         for hour in range(start_hour, end_hour):
             for minute in [0, 30]:
                 start_time = time(hour, minute)
@@ -587,7 +688,16 @@ class StandaloneScheduler:
         cleanup_end: time,
         current_resource_usage: Dict
     ) -> bool:
-        """檢查時段是否可用（含資源衝突檢測）"""
+        """檢查時段是否可用（含醫師時段檢查）"""
+        
+        # [新增] 檢查醫師時段可用性
+        if not self._is_doctor_available_at_time(
+            surgery.doctor_id, 
+            surgery.surgery_date, 
+            start_time, 
+            end_time
+        ):
+            return False
         
         # 1. 檢查手術室衝突
         if room_id in current_resource_usage.get('room', {}):
