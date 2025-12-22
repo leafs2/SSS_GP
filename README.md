@@ -24,10 +24,13 @@ cd algorithm
 #### 首次啟動
 
 python3 -m venv venv
+
 pip install -r requirements.txt
 
 #### 啟動虛擬環境
 
 .\venv\Scripts\Activate.ps1 (Windows)
+
 source venv/bin/activate (Mac)
+
 uvicorn app.main:app --reload --port 8000

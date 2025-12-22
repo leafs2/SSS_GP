@@ -242,6 +242,72 @@ const surgeryService = {
       throw error;
     }
   },
+
+  /**
+   * 獲取今日手術列表
+   * @returns {Promise<Array>} 手術列表
+   */
+  getTodaySurgeries: async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/surgery/today/list`, {
+        method: "GET",
+        credentials: "include",
+      });
+      const data = await handleResponse(response);
+      return data.data; // 注意後端回傳格式是 { success: true, data: [...] }
+    } catch (error) {
+      console.error("❌ 獲取今日手術失敗:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * 啟動手術
+   * @param {string} surgeryId
+   */
+  startSurgery: async (surgeryId) => {
+    const response = await fetch(
+      `${API_BASE_URL}/api/surgery/${surgeryId}/start`,
+      {
+        method: "POST",
+        credentials: "include",
+      }
+    );
+    return handleResponse(response);
+  },
+
+  /**
+   * 延長手術
+   * @param {string} surgeryId
+   * @param {number} minutes 延長分鐘數
+   */
+  extendSurgery: async (surgeryId, minutes = 30) => {
+    const response = await fetch(
+      `${API_BASE_URL}/api/surgery/${surgeryId}/extend`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ minutes }),
+        credentials: "include",
+      }
+    );
+    return handleResponse(response);
+  },
+
+  /**
+   * 結束手術
+   * @param {string} surgeryId
+   */
+  finishSurgery: async (surgeryId) => {
+    const response = await fetch(
+      `${API_BASE_URL}/api/surgery/${surgeryId}/finish`,
+      {
+        method: "POST",
+        credentials: "include",
+      }
+    );
+    return handleResponse(response);
+  },
 };
 
 export default surgeryService;

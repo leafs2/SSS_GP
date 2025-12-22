@@ -320,4 +320,156 @@ router.get("/:surgeryId", requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/surgery/today/list
+ * 獲取今日手術列表 (包含排程資訊與實際執行時間)
+ */
+router.get("/today/list", requireAuth, async (req, res) => {
+  try {
+    const { employee_id, role } = req.session.user;
+
+    let sql = `
+      SELECT 
+        s.surgery_id,
+        s.status,
+        s.duration as estimated_duration_hours,
+        p.name as patient_name,
+        st.surgery_name,
+        sct.room_id,
+        (s.surgery_date + sct.start_time) as scheduled_start_time,
+        
+        -- 實際時間維持轉為 UTC 輸出，確保前端計算正確
+        sct.actual_start_time AT TIME ZONE 'UTC' as actual_start_time,
+        sct.actual_end_time AT TIME ZONE 'UTC' as actual_end_time,
+        
+        COALESCE(sct.extension_minutes, 0) as extension_minutes
+      FROM surgery s
+      JOIN patient p ON s.patient_id = p.patient_id
+      JOIN surgery_type_code st ON s.surgery_type_code = st.surgery_code
+      JOIN surgery_correct_time sct ON s.surgery_id = sct.surgery_id
+      
+      -- [修正重點] 強制轉換為台北時間來判斷日期
+      WHERE s.surgery_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Taipei')::date
+    `;
+
+    const params = [];
+
+    if (role === "D") {
+      sql += ` AND s.doctor_id = $1`;
+      params.push(employee_id);
+    } else if (role === "A") {
+      sql += ` AND s.assistant_doctor_id = $1`;
+      params.push(employee_id);
+    } else if (role === "N") {
+      sql += ` AND sct.room_id IN (SELECT surgery_room_id FROM nurse_schedule WHERE employee_id = $1)`;
+      params.push(employee_id);
+    }
+
+    sql += ` ORDER BY sct.start_time ASC`;
+
+    const result = await pool.query(sql, params);
+
+    res.json({
+      success: true,
+      data: result.rows,
+    });
+  } catch (error) {
+    console.error("獲取今日手術失敗:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * POST /api/surgery/:surgeryId/start
+ * 啟動手術 (紀錄實際開始時間)
+ */
+router.post("/:surgeryId/start", requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { surgeryId } = req.params;
+    await client.query("BEGIN");
+
+    // 1. 更新 surgery 狀態
+    await client.query(
+      `UPDATE surgery SET status = 'in-progress' WHERE surgery_id = $1`,
+      [surgeryId]
+    );
+
+    // 2. 更新 surgery_correct_time 實際開始時間
+    await client.query(
+      `UPDATE surgery_correct_time 
+       SET actual_start_time = CURRENT_TIMESTAMP 
+       WHERE surgery_id = $1`,
+      [surgeryId]
+    );
+
+    await client.query("COMMIT");
+    res.json({ success: true, message: "手術已啟動" });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("啟動手術失敗:", error);
+    res.status(500).json({ success: false, message: "啟動手術失敗" });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * POST /api/surgery/:surgeryId/extend
+ * 延長手術時間 (預設增加 30 分鐘)
+ */
+router.post("/:surgeryId/extend", requireAuth, async (req, res) => {
+  try {
+    const { surgeryId } = req.params;
+    const { minutes } = req.body; // 前端傳來 30
+
+    await pool.query(
+      `UPDATE surgery_correct_time 
+       SET extension_minutes = COALESCE(extension_minutes, 0) + $2
+       WHERE surgery_id = $1`,
+      [surgeryId, minutes || 30]
+    );
+
+    res.json({ success: true, message: "手術時間已延長" });
+  } catch (error) {
+    console.error("延長手術失敗:", error);
+    res.status(500).json({ success: false, message: "延長手術失敗" });
+  }
+});
+
+/**
+ * POST /api/surgery/:surgeryId/finish
+ * 結束手術 (紀錄實際結束時間)
+ */
+router.post("/:surgeryId/finish", requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { surgeryId } = req.params;
+    await client.query("BEGIN");
+
+    // 1. 更新 surgery 狀態
+    await client.query(
+      `UPDATE surgery SET status = 'completed' WHERE surgery_id = $1`,
+      [surgeryId]
+    );
+
+    // 2. 更新 surgery_correct_time 實際結束時間
+    await client.query(
+      `UPDATE surgery_correct_time 
+       SET actual_end_time = CURRENT_TIMESTAMP 
+       WHERE surgery_id = $1`,
+      [surgeryId]
+    );
+
+    await client.query("COMMIT");
+    res.json({ success: true, message: "手術已結束" });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("結束手術失敗:", error);
+    res.status(500).json({ success: false, message: "結束手術失敗" });
+  } finally {
+    client.release();
+  }
+});
+
 export default router;

@@ -389,7 +389,7 @@ const runScheduledJob = async (isStartup = false) => {
 };
 
 export const startPeriodicScheduleService = () => {
-  const INTERVAL_MINUTES = 5;
+  const INTERVAL_MINUTES = 30;
 
   console.log(`[TS-HSO] ✅ 排程服務已啟動 (週期: ${INTERVAL_MINUTES}分)`);
 
