@@ -19,6 +19,7 @@ import NurseShiftViewPage from './pages/sss/NurseShiftViewPage';
 import NurseShiftManagePage from './pages/sss/NurseShiftManagePage';
 import AssistantShiftViewPage from './pages/sss/AssistantShiftViewPage';
 import AssistantShiftManagePage from './pages/sss/AssistantShiftManagePage';
+import PersonalSchedule from './pages/sss/PersonalSchedule';
 import './App.css'
 
 function App() {
@@ -43,6 +44,15 @@ function App() {
             element={
               <ProtectedRoute>
                 <Homepage />
+              </ProtectedRoute>
+            } 
+          />
+
+          <Route 
+            path="/sss/personal/management" 
+            element={
+              <ProtectedRoute>
+                <PersonalSchedule />
               </ProtectedRoute>
             } 
           />

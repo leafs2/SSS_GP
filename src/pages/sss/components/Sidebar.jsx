@@ -32,7 +32,6 @@ const Sidebar = () => {
       defaultPath: '/sss/homepage',
       submenu: [
         { id: 'today-schedule', title: '今日手術安排', icon: Home, path: '/sss/homepage' },
-        { id: 'tomorrow-schedule', title: '明日行程確認', icon: Clock, path: '/sss/personal/tomorrow' },
         { id: 'schedule-management', title: '個人排程管理', icon: Settings, path: '/sss/personal/management' }
       ]
     },

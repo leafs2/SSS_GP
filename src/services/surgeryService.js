@@ -308,6 +308,28 @@ const surgeryService = {
     );
     return handleResponse(response);
   },
+
+  /**
+   * 獲取月排程資料
+   * @param {number} year
+   * @param {number} month (1-12)
+   */
+  getMonthlySchedule: async (year, month) => {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/surgery/monthly?year=${year}&month=${month}`,
+        {
+          method: "GET",
+          credentials: "include",
+        }
+      );
+      const data = await handleResponse(response);
+      return data.data;
+    } catch (error) {
+      console.error("❌ 獲取月排程失敗:", error);
+      throw error;
+    }
+  },
 };
 
 export default surgeryService;
