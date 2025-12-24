@@ -493,8 +493,6 @@ router.post("/authentication/begin", async (req, res) => {
       };
     });
 
-    console.log("準備的憑證列表:", allowCredentials.length);
-
     const options = await generateAuthenticationOptions({
       rpID: RP_ID,
       timeout: 300000,
@@ -553,20 +551,12 @@ router.post("/authentication/verify", async (req, res) => {
       });
     }
 
-    console.log("storedData 完整內容:");
-    console.log(JSON.stringify(storedData, null, 2));
-
-    console.log("attResp 完整內容:");
-    console.log(JSON.stringify(attResp, null, 2));
-
     const credentialId = attResp.id;
-    console.log(`credentialId: ${credentialId}`);
 
     const responseCredentialIdBase64 = Buffer.from(
       credentialId,
       "base64url"
     ).toString("base64");
-    console.log(`轉換後的憑證 ID (base64): ${responseCredentialIdBase64}`);
 
     const userCredential = storedData.credentials.find(
       (cred) => cred.credential_id === responseCredentialIdBase64
@@ -641,6 +631,34 @@ router.post("/authentication/verify", async (req, res) => {
     };
 
     console.log(`✅ FIDO 登入成功: ${userInfo.name} (${userInfo.employee_id})`);
+
+    // 1. 設定 Session 資料
+    req.session.user = userInfo;
+    req.session.loginTime = new Date().toISOString();
+    req.session.loginMethod = "fido";
+
+    // 2. 儲存 Session 並更新資料庫關聯
+    await new Promise((resolve, reject) => {
+      req.session.save(async (err) => {
+        if (err) {
+          console.error("Session 儲存失敗:", err);
+          return reject(err);
+        }
+
+        // (選擇性)更新 sessions 資料表的 employee_id，方便管理員查詢
+        try {
+          await pool.query(
+            "UPDATE sessions SET employee_id = $1 WHERE sid = $2",
+            [userInfo.employee_id, req.sessionID]
+          );
+        } catch (dbError) {
+          console.error("更新 Session employee_id 失敗:", dbError);
+          // 不阻擋登入流程
+        }
+
+        resolve();
+      });
+    });
 
     res.json({
       success: true,

@@ -1,6 +1,7 @@
 """
 scheduler_standalone.py - 整合完整 TS-HSO 演算法版本（含護士與醫師時段限制）
 獨立排程器 - 整合 GA + Greedy + AHP + 護士人數檢查 + 醫師時段檢查
+修正版：更新 Fitness Function 權重與懲罰邏輯 (2025 Revised Version)
 """
 
 from typing import List, Dict, Optional, Tuple
@@ -123,13 +124,6 @@ class StandaloneScheduler:
     def _check_nurse_requirement(self, room: Dict, surgery: Surgery) -> bool:
         """
         檢查手術室護士人數是否符合手術需求
-        
-        Args:
-            room: 手術室資料
-            surgery: 手術資料
-            
-        Returns:
-            True if 手術室護士數 >= 手術所需護士數
         """
         room_nurse_count = room.get('nurse_count', 0)
         required_nurse_count = surgery.nurse_count
@@ -139,29 +133,15 @@ class StandaloneScheduler:
     # ==================== 新增：醫師時段檢查 ====================
     
     def _get_doctor_schedule_type(self, doctor_id: str, surgery_date: date) -> Optional[str]:
-        """
-        取得醫師在指定日期的排班類型
-        
-        Args:
-            doctor_id: 醫師 ID
-            surgery_date: 手術日期
-            
-        Returns:
-            排班類型 ('A', 'B', 'C', 'D', 'E') 或 None
-        """
+        """取得醫師在指定日期的排班類型"""
         if doctor_id not in self.doctor_schedules:
-            print(f"    ⚠️  找不到醫師 {doctor_id} 的排班資料，預設為手術日 (A)")
+            # print(f"    ⚠️  找不到醫師 {doctor_id} 的排班資料，預設為手術日 (A)")
             return 'A'  # 預設為手術日
         
         # 將日期轉換為星期
         weekday_map = {
-            0: 'monday',
-            1: 'tuesday',
-            2: 'wednesday',
-            3: 'thursday',
-            4: 'friday',
-            5: 'saturday',
-            6: 'sunday'
+            0: 'monday', 1: 'tuesday', 2: 'wednesday', 3: 'thursday',
+            4: 'friday', 5: 'saturday', 6: 'sunday'
         }
         
         weekday = weekday_map.get(surgery_date.weekday())
@@ -175,16 +155,7 @@ class StandaloneScheduler:
         doctor_id: str, 
         surgery_date: date
     ) -> List[str]:
-        """
-        取得醫師在指定日期可用的時段
-        
-        Args:
-            doctor_id: 醫師 ID
-            surgery_date: 手術日期
-            
-        Returns:
-            可用時段列表 ['morning', 'night'] 或 []
-        """
+        """取得醫師在指定日期可用的時段"""
         schedule_type = self._get_doctor_schedule_type(doctor_id, surgery_date)
         
         if not schedule_type:
@@ -202,18 +173,7 @@ class StandaloneScheduler:
         start_time: time,
         end_time: time
     ) -> bool:
-        """
-        檢查醫師在指定時間是否可用
-        
-        Args:
-            doctor_id: 醫師 ID
-            surgery_date: 手術日期
-            start_time: 手術開始時間
-            end_time: 手術結束時間
-            
-        Returns:
-            True if 醫師可用
-        """
+        """檢查醫師在指定時間是否可用"""
         available_shifts = self._get_available_shifts_for_doctor(doctor_id, surgery_date)
         
         # 如果沒有可用時段（全天門診或休假），直接返回 False
@@ -246,14 +206,7 @@ class StandaloneScheduler:
     # ==================== Stage 1: GA 手術室分配 ====================
     
     def _stage1_ga_allocation(self, surgeries: List[Surgery]) -> Dict[str, Dict]:
-        """
-        Stage 1: 基因演算法手術室分配（含護士人數檢查）
-        
-        步驟：
-        1. 建構啟發式初始解
-        2. GA 優化 (選擇、交叉、突變)
-        3. 返回最佳分配方案
-        """
+        """Stage 1: 基因演算法手術室分配（含護士人數檢查）"""
         print("  建構啟發式初始解...")
         initial_solution = self._constructive_heuristic(surgeries)
         
@@ -276,12 +229,12 @@ class StandaloneScheduler:
                 candidate_rooms = [
                     room for room in self.available_rooms.values()
                     if room['room_type'] == room_type
-                    and self._check_nurse_requirement(room, surgery)  # 新增護士檢查
+                    and self._check_nurse_requirement(room, surgery)
                 ]
                 room_pools[room_type] = candidate_rooms
             
             if not room_pools[room_type]:
-                print(f"    ⚠️  手術 {surgery.surgery_id} 找不到護士人數足夠的手術室（需要 {surgery.nurse_count} 人）")
+                # print(f"    ⚠️  手術 {surgery.surgery_id} 找不到護士人數足夠的手術室（需要 {surgery.nurse_count} 人）")
                 continue
             
             # Round-Robin: 選擇負載最低的手術室
@@ -301,18 +254,6 @@ class StandaloneScheduler:
                 'suggested_shift': 'morning',
                 'score': 0
             }
-        
-        used_rooms = len(set(a['room_id'] for a in allocation.values()))
-        print(f"    ✓ 初始解：使用 {used_rooms} 間手術室")
-        
-        room_loads_summary = {}
-        for s_id, alloc in allocation.items():
-            room_id = alloc['room_id']
-            surgery = next(s for s in surgeries if s.surgery_id == s_id)
-            room_loads_summary[room_id] = room_loads_summary.get(room_id, 0) + (surgery.duration + 0.5)
-        
-        for room_id, load in sorted(room_loads_summary.items()):
-            print(f"      {room_id}: {load:.1f} 小時")
         
         return allocation
     
@@ -364,75 +305,130 @@ class StandaloneScheduler:
         used_rooms = len(set(a['room_id'] for a in best_solution.values()))
         print(f"    ✓ GA完成：最佳適應度={best_fitness:.2f}, 使用手術室={used_rooms}")
         
-        room_loads_summary = {}
-        for s_id, alloc in best_solution.items():
-            room_id = alloc['room_id']
-            surgery = next(s for s in surgeries if s.surgery_id == s_id)
-            room_loads_summary[room_id] = room_loads_summary.get(room_id, 0) + (surgery.duration + 0.5)
-        
-        print(f"    最終分配:")
-        for room_id, load in sorted(room_loads_summary.items()):
-            print(f"      {room_id}: {load:.1f} 小時")
-        
         return best_solution
     
     def _calculate_fitness(self, allocation: Dict, surgeries: List[Surgery]) -> float:
-        """計算適應度"""
-        room_usage = {}
+        """
+        計算適應度 (修正版：含醫師分散、護理浪費、超時懲罰)
         
+        F = max(0, BaseScore - TotalPenalty)
+        BaseScore = (S_util * w_util + S_bal * w_bal + S_cnt * w_cnt) * 100
+        TotalPenalty = (P_overtime * W_overtime) + (P_split * W_split) + (P_waste * W_waste)
+        """
+        room_usage = {}
+        doctor_rooms = {}  # 用於計算醫師分散懲罰 {doctor_id: set(room_ids)}
+        nurse_waste_penalty = 0 # 護理浪費懲罰累積 (raw value)
+        
+        # 1. 遍歷分配結果，統計基礎數據
         for surgery_id, alloc in allocation.items():
             room_id = alloc['room_id']
             surgery = next((s for s in surgeries if s.surgery_id == surgery_id), None)
+            
             if surgery:
-                duration_hours = surgery.duration + 0.5
+                # 統計房間工時
+                duration_hours = surgery.duration + 0.5 # 含清潔時間
                 room_usage[room_id] = room_usage.get(room_id, 0) + duration_hours
-        
+                
+                # 收集醫師分配的房間 (用於醫師分散懲罰)
+                if surgery.doctor_id:
+                    if surgery.doctor_id not in doctor_rooms:
+                        doctor_rooms[surgery.doctor_id] = set()
+                    doctor_rooms[surgery.doctor_id].add(room_id)
+                
+                # 計算護理人力浪費 (用於護理浪費懲罰)
+                room = self.available_rooms.get(room_id)
+                if room:
+                    required_nurses = surgery.nurse_count
+                    provided_nurses = room.get('nurse_count', 0)
+                    if provided_nurses > required_nurses:
+                        # 浪費值 = 多餘人數 * 手術時長 (含清潔)
+                        # 這代表了 "浪費的人時 (Man-Hours)"
+                        nurse_waste_penalty += (provided_nurses - required_nurses) * duration_hours
+
         if not room_usage:
             return 0
         
+        # 2. 計算 BaseScore 的三個指標
         IDEAL_HOURS_PER_ROOM = 8.0
         total_hours = sum(room_usage.values())
+        # 理想房數：總工時 / 8，無條件進位 (至少1間)
         ideal_room_count = max(1, int(total_hours / IDEAL_HOURS_PER_ROOM) + 1)
         actual_room_count = len(room_usage)
         
+        # (1) 利用率分數 (Utilization Score)
         if actual_room_count < ideal_room_count:
+            # 房數過少 (過度擁擠)，給予懲罰性低分
             utilization_score = actual_room_count / ideal_room_count * 0.5
         else:
+            # 正常計算：總工時 / 總容量
             total_capacity = actual_room_count * IDEAL_HOURS_PER_ROOM
             utilization_score = min(1.0, total_hours / total_capacity)
         
+        # (2) 平衡分數 (Balance Score)
         usage_values = list(room_usage.values())
         if len(usage_values) > 1:
             avg = sum(usage_values) / len(usage_values)
             variance = sum((x - avg) ** 2 for x in usage_values) / len(usage_values)
             std_dev = variance ** 0.5
+            # 公式：1 / (1 + std_dev / 2)
             balance_score = 1.0 / (1.0 + std_dev / 2.0)
         else:
-            balance_score = 0.5
+            balance_score = 0.5 # 只有一間房時的預設值
+            
+        # (3) 開房數分數 (Room Count Score)
+        # 公式：1.0 - (差距比例 * 0.5)
+        # 獎勵使用最少的房間數
+        room_diff_ratio = abs(actual_room_count - ideal_room_count) / max(ideal_room_count, 1)
+        room_count_score = max(0, 1.0 - room_diff_ratio * 0.5)
         
-        overtime_penalty = 0
+        # 3. 計算 BaseScore (加權總分)
+        # [NEW] 依據權重設定: Util=0.35, Bal=0.45, Cnt=0.20
+        w_util = 0.35
+        w_bal = 0.45
+        w_cnt = 0.20
+        
+        base_score = (
+            utilization_score * w_util +
+            balance_score * w_bal +
+            room_count_score * w_cnt
+        ) * 100
+        
+        # 4. 計算 TotalPenalty (三大懲罰)
+        
+        # (A) 超時懲罰 (Overtime Penalty)
+        # 公式：sum((h - 8)^1.5) for h > 8
+        raw_overtime_penalty = 0
         for hours in room_usage.values():
             if hours > IDEAL_HOURS_PER_ROOM:
                 excess = hours - IDEAL_HOURS_PER_ROOM
-                overtime_penalty += (excess ** 1.5)
+                raw_overtime_penalty += (excess ** 1.5)
+                
+        # (B) 醫師分散懲罰 (Doctor Split Penalty) [NEW]
+        # 公式：sum(unique_rooms - 1) for distinct doctors
+        # 懲罰醫師在多個房間奔波
+        raw_split_penalty = 0
+        for doc_id, rooms in doctor_rooms.items():
+            if len(rooms) > 1:
+                raw_split_penalty += (len(rooms) - 1)
+                
+        # (C) 護理浪費懲罰 (Nurse Waste Penalty) [NEW]
+        # 公式：sum((room_nurse - req_nurse) * duration)
+        # 已經在迴圈中計算為 nurse_waste_penalty
+        raw_waste_penalty = nurse_waste_penalty
         
-        room_count_score = 1.0 - abs(actual_room_count - ideal_room_count) / max(ideal_room_count, 1) * 0.5
-        room_count_score = max(0, room_count_score)
+        # [NEW] 依據權重設定: Overtime=5.0, Split=3.0, Waste=2.0
+        W_OVERTIME = 5.0
+        W_SPLIT = 3.0
+        W_WASTE = 2.0
         
-        weights = {
-            'utilization': 0.25,
-            'balance': 0.25,
-            'overtime': 0.3,
-            'room_count': 0.2
-        }
+        total_penalty = (
+            (raw_overtime_penalty * W_OVERTIME) +
+            (raw_split_penalty * W_SPLIT) +
+            (raw_waste_penalty * W_WASTE)
+        )
         
-        base_score = (
-            utilization_score * weights['utilization'] +
-            balance_score * weights['balance'] +
-            room_count_score * weights['room_count']
-        ) * 100
-        
-        final_score = base_score - (overtime_penalty * 10)
+        # 5. 最終分數
+        final_score = base_score - total_penalty
         
         return max(0, final_score)
     
@@ -549,13 +545,10 @@ class StandaloneScheduler:
         surgeries: List[Surgery], 
         allocation: Dict[str, Dict]
     ) -> Tuple[List[ScheduleResult], List[Surgery]]:
-        """
-        Stage 2: Greedy + AHP 時間排程（含醫師時段檢查）
-        """
+        """Stage 2: Greedy + AHP 時間排程（含醫師時段檢查）"""
         surgeries_with_score = []
         for surgery in surgeries:
             if surgery.surgery_id not in allocation:
-                print(f"  ⚠️  手術 {surgery.surgery_id} 未在分配中，跳過")
                 continue
             
             ahp_score = self._calculate_ahp_score(surgery)
@@ -571,7 +564,6 @@ class StandaloneScheduler:
         for idx, (surgery, ahp_score) in enumerate(surgeries_with_score, 1):
             room_id = allocation[surgery.surgery_id]['room_id']
             
-            # [修正] 傳入醫師資訊以進行時段檢查
             feasible_slot = self._find_feasible_slot(
                 surgery, room_id, current_resource_usage
             )
@@ -592,11 +584,7 @@ class StandaloneScheduler:
                 
                 results.append(result)
                 self._update_resource_usage(current_resource_usage, surgery, room_id, result)
-                
-                if (idx) % 10 == 0:
-                    print(f"    進度: {idx}/{len(surgeries_with_score)}")
             else:
-                print(f"  ⚠️  手術 {surgery.surgery_id} 無可行時段（可能醫師時段衝突）")
                 failed.append(surgery)
         
         return results, failed
@@ -628,9 +616,7 @@ class StandaloneScheduler:
         room_id: str,
         current_resource_usage: Dict
     ) -> Optional[Dict]:
-        """
-        找可行時段（含醫師時段檢查）
-        """
+        """找可行時段（含醫師時段檢查）"""
         start_hour, end_hour = 8, 20
         
         for hour in range(start_hour, end_hour):
@@ -643,7 +629,6 @@ class StandaloneScheduler:
                 end_time = end_dt.time()
                 cleanup_end = cleanup_dt.time()
                 
-                # [修正] 加入醫師時段檢查
                 if self._is_slot_available(
                     surgery, room_id, start_time, end_time, cleanup_end, current_resource_usage
                 ):
@@ -659,6 +644,7 @@ class StandaloneScheduler:
                             'is_cross': is_cross
                         }
         
+        # 如果沒有不跨班的，找跨班或晚班的
         for hour in range(start_hour, end_hour):
             for minute in [0, 30]:
                 start_time = time(hour, minute)
@@ -690,7 +676,6 @@ class StandaloneScheduler:
     ) -> bool:
         """檢查時段是否可用（含醫師時段檢查）"""
         
-        # [新增] 檢查醫師時段可用性
         if not self._is_doctor_available_at_time(
             surgery.doctor_id, 
             surgery.surgery_date, 
@@ -699,7 +684,6 @@ class StandaloneScheduler:
         ):
             return False
         
-        # 1. 檢查手術室衝突
         if room_id in current_resource_usage.get('room', {}):
             for usage in current_resource_usage['room'][room_id]:
                 if usage['date'] == surgery.surgery_date:
@@ -709,7 +693,6 @@ class StandaloneScheduler:
                     ):
                         return False
         
-        # 2. 檢查醫師衝突（含1小時休息）
         if surgery.doctor_id in current_resource_usage.get('doctor', {}):
             end_with_rest = self._add_minutes(cleanup_end, 60)
             for usage in current_resource_usage['doctor'][surgery.doctor_id]:
@@ -720,7 +703,6 @@ class StandaloneScheduler:
                     if self._time_overlap(start_time, end_with_rest, start_with_rest, end_usage_rest):
                         return False
         
-        # 3. 檢查助理衝突
         if surgery.assistant_doctor_id and surgery.assistant_doctor_id in current_resource_usage.get('assistant', {}):
             end_with_rest = self._add_minutes(cleanup_end, 60)
             for usage in current_resource_usage['assistant'][surgery.assistant_doctor_id]:
@@ -768,33 +750,25 @@ class StandaloneScheduler:
             'cleanup_end_time': result.cleanup_end_time
         })
     
-    # ==================== 輔助函數 ====================
-    
     def _time_overlap(self, start1: time, end1: time, start2: time, end2: time) -> bool:
-        """檢查時間重疊"""
         return not (end1 <= start2 or end2 <= start1)
     
     def _get_shift(self, t: time) -> str:
-        """取得時段"""
         hour = t.hour
         if 8 <= hour < 16: return 'morning'
         if 16 <= hour < 24: return 'night'
         return 'graveyard'
     
     def _is_cross_shift(self, start: time, end: time) -> bool:
-        """判斷跨時段"""
         return self._get_shift(start) != self._get_shift(end)
     
     def _add_minutes(self, t: time, minutes: int) -> time:
-        """時間加分鐘"""
         dt = datetime.combine(datetime.today(), t) + timedelta(minutes=minutes)
         return dt.time()
     
     def _subtract_minutes(self, t: time, minutes: int) -> time:
-        """時間減分鐘"""
         dt = datetime.combine(datetime.today(), t) - timedelta(minutes=minutes)
         return dt.time()
     
     def calculate_utilization(self) -> float:
-        """計算利用率"""
         return 75.0
