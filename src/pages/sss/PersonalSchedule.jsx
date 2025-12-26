@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   ChevronLeft, ChevronRight, Calendar as CalendarIcon, 
-  MapPin, Clock, User, X, Edit, Trash2, Activity, Loader2, MoreHorizontal, Users
+  MapPin, Clock, User, X, Edit, Trash2, Activity, Loader2, Users
 } from 'lucide-react';
 import Layout from './components/Layout';
 import PageHeader from './components/PageHeader';
@@ -29,6 +29,7 @@ const PersonalSchedule = () => {
     try {
       const year = currentDate.getFullYear();
       const month = currentDate.getMonth() + 1;
+      // 後端 API 已修改為會自動撈取前後緩衝日期，所以這裡傳入當前年月即可
       const data = await surgeryService.getMonthlySchedule(year, month);
       setSurgeries(data || []);
     } catch (error) {
@@ -63,7 +64,6 @@ const PersonalSchedule = () => {
     if (!date) return [];
 
     // 輔助函式：取得當地時間的 YYYY-MM-DD
-    // 解決使用了 toISOString() 導致時區轉換變成前一天的問題
     const getLocalDateKey = (d) => {
       const dateObj = new Date(d);
       const year = dateObj.getFullYear();
@@ -72,35 +72,51 @@ const PersonalSchedule = () => {
       return `${year}-${month}-${day}`;
     };
 
-    // 取得當前日曆格子的日期字串
     const targetDateStr = getLocalDateKey(date);
 
     return surgeries.filter(s => {
-      // 取得資料庫回傳的日期字串
       const surgeryDateStr = getLocalDateKey(s.surgery_date);
       return surgeryDateStr === targetDateStr;
     }).sort((a, b) => {
-      // 按開始時間排序
       if (!a.start_time_full || !b.start_time_full) return 0;
       return new Date(a.start_time_full) - new Date(b.start_time_full);
     });
   };
 
-  // --- 月曆生成 ---
+  // --- 月曆生成 (支援前後月補白) ---
   const generateCalendarDays = () => {
     const year = currentDate.getFullYear();
-    const month = currentDate.getMonth();
+    const month = currentDate.getMonth(); // 0-11
+    
     const firstDayOfMonth = new Date(year, month, 1);
     const lastDayOfMonth = new Date(year, month + 1, 0);
     const daysInMonth = lastDayOfMonth.getDate();
-    const startDayOfWeek = firstDayOfMonth.getDay() === 0 ? 6 : firstDayOfMonth.getDay() - 1; 
+    
+    // 計算該月第一天是星期幾 (0=週日, 1=週一... 需轉換為週一為起點)
+    const firstDayIndex = firstDayOfMonth.getDay();
+    const startDayOfWeek = firstDayIndex === 0 ? 6 : firstDayIndex - 1; 
     
     const calendarDays = [];
     
-    for (let i = 0; i < startDayOfWeek; i++) {
-      calendarDays.push({ type: 'empty', key: `empty-${i}` });
+    // 1. 補上前一個月的天數
+    const prevMonthLastDay = new Date(year, month, 0).getDate(); // 上個月最後一天
+    
+    for (let i = startDayOfWeek - 1; i >= 0; i--) {
+      const dayVal = prevMonthLastDay - i;
+      const date = new Date(year, month - 1, dayVal);
+      date.setHours(12, 0, 0, 0);
+      
+      calendarDays.push({ 
+        type: 'day', 
+        val: dayVal, 
+        date: date,
+        key: `prev-${dayVal}`,
+        isCurrentMonth: false, // 標記非本月
+        events: getSurgeriesForDate(date)
+      });
     }
     
+    // 2. 本月天數
     for (let i = 1; i <= daysInMonth; i++) {
       const date = new Date(year, month, i);
       date.setHours(12, 0, 0, 0);
@@ -109,10 +125,29 @@ const PersonalSchedule = () => {
         type: 'day', 
         val: i, 
         date: date,
-        key: `day-${i}`,
+        key: `curr-${i}`,
+        isCurrentMonth: true, // 標記為本月
         events: getSurgeriesForDate(date)
       });
     }
+    
+    // 3. 補下個月的天數 (固定補滿 42 格，確保版面高度一致)
+    const remainingCells = 42 - calendarDays.length;
+    
+    for (let i = 1; i <= remainingCells; i++) {
+      const date = new Date(year, month + 1, i); // 下個月
+      date.setHours(12, 0, 0, 0);
+      
+      calendarDays.push({ 
+        type: 'day', 
+        val: i, 
+        date: date,
+        key: `next-${i}`,
+        isCurrentMonth: false, // 標記非本月
+        events: getSurgeriesForDate(date)
+      });
+    }
+    
     return calendarDays;
   };
 
@@ -128,7 +163,6 @@ const PersonalSchedule = () => {
     const start = new Date(surgery.start_time_full);
     const end = new Date(surgery.end_time_full);
     
-    // 格式化為 HH:mm
     const formatTime = (date) => {
       return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
     };
@@ -177,10 +211,9 @@ const PersonalSchedule = () => {
              </div>
         </PageHeader>
 
-        {/* 內容主容器 - 保持 max-w-7xl，增加底部padding避免被遮擋 */}
+        {/* 內容主容器 */}
         <div className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 pb-6 min-h-0 flex flex-col">
           
-          {/* 內部 Flex 容器 (月曆 + 側邊欄) */}
           <div className="flex-1 flex overflow-hidden gap-4 relative min-h-0">
             
             {/* 左側日曆區塊 */}
@@ -194,7 +227,7 @@ const PersonalSchedule = () => {
                   ))}
                 </div>
 
-                {/* 日曆格子 - 固定 6 行，確保最後一行可見 */}
+                {/* 日曆格子 */}
                 <div className="grid grid-cols-7 gap-2 flex-1 overflow-y-auto pr-1 auto-rows-[minmax(90px,_1fr)]">
                   {loading ? (
                       <div className="col-span-7 row-span-6 flex items-center justify-center bg-white/50 rounded-lg border border-gray-200">
@@ -202,27 +235,26 @@ const PersonalSchedule = () => {
                       </div>
                   ) : (
                       generateCalendarDays().map((day) => {
-                          if (day.type === 'empty') return <div key={day.key} className="bg-transparent" />;
-
                           const isSelected = selectedDate && day.date.toDateString() === selectedDate.toDateString();
                           const isToday = new Date().toDateString() === day.date.toDateString();
                           const eventsCount = day.events.length;
-                          // 🎯 最多顯示 2 筆手術
                           const displayEvents = day.events.slice(0, 2);
                           const hasMore = eventsCount > 2;
-                          // 🎨 超過2台手術時改變顏色
                           const isBusy = eventsCount > 2;
+                          const isCurrentMonth = day.isCurrentMonth; // 取得是否為本月
 
                           return (
                             <div 
                                 key={day.key}
                                 onClick={() => handleDateClick(day.date)}
                                 className={`
-                                  relative bg-white rounded-lg border p-2 cursor-pointer transition-all 
+                                  relative rounded-lg border p-2 cursor-pointer transition-all 
                                   hover:shadow-lg hover:z-20
                                   flex flex-col overflow-hidden
                                   ${isSelected ? 'ring-2 ring-blue-500 border-transparent z-10 shadow-lg' : 'border-gray-200'}
                                   ${isToday ? 'bg-blue-50 border-blue-300' : ''}
+                                  /* 非本月顯示灰色背景與淡色文字 */
+                                  ${!isCurrentMonth ? 'bg-gray-50/50 text-gray-400' : 'bg-white'} 
                                   ${isBusy ? 'bg-orange-50' : ''}
                                   ${eventsCount > 0 ? 'hover:border-blue-400' : ''}
                                 `}
@@ -232,12 +264,12 @@ const PersonalSchedule = () => {
                                   <span className={`
                                       text-sm font-bold w-6 h-6 flex items-center justify-center rounded-full
                                       transition-colors
-                                      ${isToday ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700'}
+                                      ${isToday ? 'bg-blue-600 text-white shadow-md' : 
+                                        !isCurrentMonth ? 'text-gray-400' : 'text-gray-700'}
                                   `}>
                                       {day.val}
                                   </span>
 
-                                  {/* 更多指示器 */}
                                   {hasMore && (
                                     <div className="text-center text-[9px] text-orange-600 font-bold shrink-0 py-0.5">
                                       <span>還有 {eventsCount - 2} 筆</span>
@@ -247,9 +279,8 @@ const PersonalSchedule = () => {
                                   {eventsCount > 0 && (
                                       <span className={`
                                         text-[10px] font-semibold px-1.5 py-0.5 rounded-full
-                                        ${isBusy 
-                                          ? 'bg-orange-500 text-white' 
-                                          : 'bg-blue-100 text-blue-700'}
+                                        ${isBusy ? 'bg-orange-500 text-white' : 'bg-blue-100 text-blue-700'}
+                                        ${!isCurrentMonth ? 'opacity-70' : ''}
                                       `}>
                                         {eventsCount}台
                                       </span>
@@ -257,7 +288,7 @@ const PersonalSchedule = () => {
                                 </div>
 
                                 {/* 手術項目列表 - 最多 2 筆 */}
-                                <div className="flex-1 flex flex-col gap-1 min-h-0 overflow-hidden">
+                                <div className={`flex-1 flex flex-col gap-1 min-h-0 overflow-hidden ${!isCurrentMonth ? 'opacity-60' : ''}`}>
                                   {displayEvents.map((surgery) => {
                                     const formatted = formatSurgeryOneLine(surgery);
                                     
@@ -266,17 +297,15 @@ const PersonalSchedule = () => {
                                         key={surgery.surgery_id} 
                                         className="relative group/item shrink-0"
                                       >
-                                        {/* 單行顯示：藍色圓點 + 時間 + 房間 */}
                                         <div className="flex items-center gap-1">
-                                          {/* 藍色圓點 */}
-                                          <div className="w-1.5 h-1.5 rounded-full shrink-0 bg-blue-500" />
+                                          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${!isCurrentMonth ? 'bg-blue-300' : 'bg-blue-500'}`} />
                                           
-                                          {/* 單行資訊 */}
                                           <div className={`
-                                            flex-1 text-[10px] font-mono text-gray-700 font-semibold text-left
-                                            px-1.5 py-0.5 rounded
-                                            bg-gray-50 border border-gray-200
-                                            hover:border-blue-300 hover:bg-blue-50
+                                            flex-1 text-[10px] font-mono font-semibold text-left
+                                            px-1.5 py-0.5 rounded border
+                                            ${!isCurrentMonth 
+                                                ? 'bg-gray-100 border-gray-200 text-gray-500' 
+                                                : 'bg-gray-50 border-gray-200 text-gray-700 hover:border-blue-300 hover:bg-blue-50'}
                                             transition-all truncate leading-tight
                                           `}>
                                             {formatted.display}
@@ -285,8 +314,6 @@ const PersonalSchedule = () => {
                                       </div>
                                     );
                                   })}
-                                  
-                                  
                                 </div>
                             </div>
                           );
@@ -298,7 +325,6 @@ const PersonalSchedule = () => {
             {/* 右側詳情欄 */}
             {isSidebarOpen && selectedDate && (
                 <div className="w-96 bg-white rounded-xl shadow-xl border border-gray-200 flex flex-col shrink-0 animate-in slide-in-from-right-4 duration-300">
-                  {/* 側邊欄標題 */}
                   <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gradient-to-r from-blue-50 to-white rounded-t-xl shrink-0">
                       <div>
                         <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
@@ -317,7 +343,6 @@ const PersonalSchedule = () => {
                       </button>
                   </div>
 
-                  {/* 側邊欄內容 */}
                   <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50/50 rounded-b-xl">
                       {getSurgeriesForDate(selectedDate).length > 0 ? (
                         getSurgeriesForDate(selectedDate).map((surgery) => {
@@ -328,10 +353,8 @@ const PersonalSchedule = () => {
                               key={surgery.surgery_id} 
                               className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition-all duration-200 group relative overflow-hidden"
                             >
-                              {/* 左側藍色狀態條 */}
                               <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500" />
 
-                              {/* 手術名稱與狀態 - 處理長文字問題 */}
                               <div className="flex justify-between items-start mb-3 pl-2 gap-2">
                                   <h4 className="font-bold text-gray-800 text-base leading-snug flex-1 break-words text-left">
                                     {surgery.surgery_name}
@@ -346,9 +369,7 @@ const PersonalSchedule = () => {
                                   </span>
                               </div>
 
-                              {/* 詳細資訊 */}
                               <div className="space-y-2.5 text-sm text-gray-600 pl-2">
-                                  {/* 病患資訊 */}
                                   <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
                                     <User className="w-4 h-4 text-blue-500 shrink-0" />
                                     <div className="flex items-center gap-2">
@@ -362,7 +383,6 @@ const PersonalSchedule = () => {
                                     </div>
                                   </div>
 
-                                  {/* 時間資訊 */}
                                   <div className="flex items-center gap-2 p-2 bg-blue-50 rounded-lg">
                                     <Clock className="w-4 h-4 text-blue-600 shrink-0" />
                                     <span className="font-mono font-semibold text-gray-800">
@@ -370,7 +390,6 @@ const PersonalSchedule = () => {
                                     </span>
                                   </div>
 
-                                  {/* 手術房資訊 */}
                                   <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
                                     <MapPin className="w-4 h-4 text-gray-600 shrink-0" />
                                     <span className="font-bold text-gray-800">
@@ -378,14 +397,12 @@ const PersonalSchedule = () => {
                                     </span>
                                   </div>
 
-                                  {/* 醫療團隊資訊 */}
                                   <div className="p-2 bg-blue-50 rounded-lg border border-blue-100">
                                     <div className="flex items-center gap-2 mb-2">
                                       <Users className="w-4 h-4 text-blue-600 shrink-0" />
                                       <span className="font-semibold text-gray-700 text-xs">醫療團隊</span>
                                     </div>
                                     <div className="space-y-1.5 ml-6">
-                                      {/* 主刀醫師 */}
                                       <div className="flex items-center gap-2 text-xs">
                                         <span className="text-gray-500">主刀：</span>
                                         <span className="font-medium text-gray-800">
@@ -393,7 +410,6 @@ const PersonalSchedule = () => {
                                         </span>
                                       </div>
                                       
-                                      {/* 助手醫師 */}
                                       {surgery.assistant_doctor_name && (
                                         <div className="flex items-center gap-2 text-xs">
                                           <span className="text-gray-500">助手：</span>
@@ -403,7 +419,6 @@ const PersonalSchedule = () => {
                                         </div>
                                       )}
                                       
-                                      {/* 護理師 */}
                                       {surgery.nurses && surgery.nurses.length > 0 ? (
                                         <div className="flex items-start gap-2 text-xs">
                                           <span className="text-gray-500 shrink-0">護理師：</span>
@@ -429,7 +444,6 @@ const PersonalSchedule = () => {
                                   </div>
                               </div>
 
-                              {/* 操作按鈕 (僅醫師可見) */}
                               {user && user.role === 'D' && (
                                   <div className="mt-4 pt-3 border-t border-gray-100 flex justify-end gap-2 pl-2">
                                     <button 

@@ -752,6 +752,9 @@ const AddSchedulePage = () => {
                 // 否則，如果有狀態 (即使是不可選的休假/額滿)，也要顯示該狀態。
                 const displayScheduleStatus = isPrepOrPast ? null : scheduleStatus;
 
+                const shouldShowLabel = displayScheduleStatus && 
+                                        (displayScheduleStatus.type === 'clinic-fullday' || displayScheduleStatus.type === 'full');
+
                 return (
                   <button
                     key={index}
@@ -794,13 +797,12 @@ const AddSchedulePage = () => {
                       </span>
                       
                       {/* 排班狀態指示器 (顯示於非選中、非推薦時) */}
-                      {displayScheduleStatus && !isSelected && !isRecommended && (
+                      {shouldShowLabel && !isSelected && !isRecommended && (
                         <div className="flex items-center gap-0.5 mt-0.5">
                           {displayScheduleStatus.type === 'full' ? (
                              // 額滿顯示 X icon
                              <X className="w-3 h-3 text-red-400" />
                           ) : (
-                             // 其他狀態 (看診/休假/手術) 顯示圓點
                              <>
                                {displayScheduleStatus.dotColor && <div className={`w-1.5 h-1.5 rounded-full ${displayScheduleStatus.dotColor}`}></div>}
                              </>

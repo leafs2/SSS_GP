@@ -336,10 +336,8 @@ router.get("/today/list", requireAuth, async (req, res) => {
 
 /**
  * GET /api/surgery/monthly
- * 獲取個人月排程 (根據角色區分資料來源)
+ * 獲取個人月排程 (已修改：包含前後補白日期的完整視圖)
  * Query: ?year=2023&month=12
- *
- * 🔧 已修改：加入助手醫師和護理師資料
  */
 router.get("/monthly", requireAuth, async (req, res) => {
   try {
@@ -351,6 +349,31 @@ router.get("/monthly", requireAuth, async (req, res) => {
         .status(400)
         .json({ success: false, message: "請提供年份與月份" });
     }
+
+    // --- 修改開始：計算完整月曆視圖的日期範圍 ---
+
+    // 1. 取得該月第一天與最後一天
+    const firstDay = new Date(year, month - 1, 1);
+    const lastDay = new Date(year, month, 0);
+
+    // 2. 計算視圖開始日 (向前推至週一)
+    // getDay(): 0是週日, 1是週一...
+    const firstDayIndex = firstDay.getDay();
+    // 如果是週日(0)，前面有6天；週一(1)前面有0天
+    const diffToMonday = firstDayIndex === 0 ? 6 : firstDayIndex - 1;
+
+    const startDate = new Date(firstDay);
+    startDate.setDate(firstDay.getDate() - diffToMonday);
+
+    // 3. 計算視圖結束日 (向後推至週日，並確保涵蓋 42 格也就是 6 週的資料量)
+    // 為了確保前端渲染 6 行日曆時都有資料，我們簡單地將範圍抓大一點
+    const lastDayIndex = lastDay.getDay();
+    const diffToSunday = lastDayIndex === 0 ? 0 : 7 - lastDayIndex;
+
+    const endDate = new Date(lastDay);
+    // 多加 7 天作為緩衝，確保前端若渲染 6 行也能抓到資料
+    endDate.setDate(lastDay.getDate() + diffToSunday + 7);
+    // --- 修改結束 ---
 
     let sql = `
       SELECT 
@@ -366,9 +389,7 @@ router.get("/monthly", requireAuth, async (req, res) => {
         sct.room_id,
         (s.surgery_date + sct.start_time) as start_time_full,
         (s.surgery_date + sct.end_time) as end_time_full,
-        -- 加入主刀醫師名稱
         d.name as doctor_name,
-        -- 加入助手醫師名稱
         ad.name as assistant_doctor_name
       FROM surgery s
       JOIN patient p ON s.patient_id = p.patient_id
@@ -376,13 +397,14 @@ router.get("/monthly", requireAuth, async (req, res) => {
       LEFT JOIN surgery_correct_time sct ON s.surgery_id = sct.surgery_id
       LEFT JOIN employees d ON s.doctor_id = d.employee_id
       LEFT JOIN employees ad ON s.assistant_doctor_id = ad.employee_id
-      WHERE EXTRACT(YEAR FROM s.surgery_date) = $1 
-      AND EXTRACT(MONTH FROM s.surgery_date) = $2
+      
+      -- 修改重點：使用計算出的範圍查詢，而非單純匹配年月
+      WHERE s.surgery_date >= $1 AND s.surgery_date <= $2
     `;
 
-    const params = [year, month];
+    const params = [startDate, endDate]; // $1, $2
 
-    // --- 角色過濾邏輯 ---
+    // --- 角色過濾邏輯 (參數索引從 $3 開始) ---
     if (role === "D") {
       sql += ` AND s.doctor_id = $3`;
       params.push(employee_id);
@@ -392,7 +414,7 @@ router.get("/monthly", requireAuth, async (req, res) => {
     } else if (role === "N") {
       sql += ` 
         AND (
-          -- 情況1: 固定護理師 - 該護理師被分配到該手術房，且當天沒休假
+          -- 情況1: 固定護理師
           (
             sct.room_id IN (
               SELECT surgery_room_id 
@@ -411,7 +433,7 @@ router.get("/monthly", requireAuth, async (req, res) => {
             )
           )
           OR
-          -- 情況2: 流動護理師 - 根據星期幾查 nurse_float
+          -- 情況2: 流動護理師
           EXISTS (
             SELECT 1 FROM nurse_float nf
             WHERE nf.employee_id = $3
@@ -434,7 +456,7 @@ router.get("/monthly", requireAuth, async (req, res) => {
 
     const result = await pool.query(sql, params);
 
-    // 為每個手術查詢分配的護理師（固定 + 流動）
+    // --- 護理師分配邏輯 (保持原有邏輯不變) ---
     const surgeriesWithNurses = await Promise.all(
       result.rows.map(async (surgery) => {
         if (
@@ -445,81 +467,50 @@ router.get("/monthly", requireAuth, async (req, res) => {
           return { ...surgery, nurses: [] };
         }
 
-        // 1. 判斷手術時間屬於哪個班別
         const surgeryStart = new Date(surgery.start_time_full);
         const hour = surgeryStart.getHours();
-
         let schedulingTime;
-        if (hour >= 8 && hour < 16) {
-          schedulingTime = "早班";
-        } else if (hour >= 16 && hour < 24) {
-          schedulingTime = "晚班";
-        } else {
-          schedulingTime = "大夜班";
-        }
+        if (hour >= 8 && hour < 16) schedulingTime = "早班";
+        else if (hour >= 16 && hour < 24) schedulingTime = "晚班";
+        else schedulingTime = "大夜班";
 
-        // 2. 計算是星期幾 (0=週日, 1=週一, ..., 6=週六)
         const surgeryDate = new Date(surgery.surgery_date);
-        const dayOfWeek = surgeryDate.getDay(); // 0-6
-
-        // 轉換為資料庫的 day_off 格式 (1=週一, 7=週日)
+        const dayOfWeek = surgeryDate.getDay();
         const dayOffId = dayOfWeek === 0 ? 7 : dayOfWeek;
-
-        // 轉換為 nurse_float 的欄位名稱
         const dayColumns = ["sun", "mon", "tues", "wed", "thu", "fri", "sat"];
         const dayColumn = dayColumns[dayOfWeek];
 
-        // 3. 查詢固定護理師（排除當天休假的）
         const fixedNursesQuery = `
-          SELECT DISTINCT
-            e.employee_id,
-            e.name,
-            'fixed' as nurse_type
+          SELECT DISTINCT e.employee_id, e.name, 'fixed' as nurse_type
           FROM nurse_schedule ns
           JOIN employees e ON ns.employee_id = e.employee_id
-          WHERE ns.surgery_room_id = $1
-            AND ns.scheduling_time = $2
+          WHERE ns.surgery_room_id = $1 AND ns.scheduling_time = $2
             AND e.status = 'active'
-            -- 排除當天休假的護理師
-            AND NOT EXISTS (
-              SELECT 1 FROM nurse_dayoff nd
-              WHERE nd.id = e.employee_id AND nd.day_off = $3
-            )
+            AND NOT EXISTS (SELECT 1 FROM nurse_dayoff nd WHERE nd.id = e.employee_id AND nd.day_off = $3)
           ORDER BY e.name
         `;
-
         const fixedNurses = await pool.query(fixedNursesQuery, [
           surgery.room_id,
           schedulingTime,
           dayOffId,
         ]);
 
-        // 4. 查詢流動護理師（當天分配到該手術房的）
         const floatNursesQuery = `
-          SELECT DISTINCT
-            e.employee_id,
-            e.name,
-            'float' as nurse_type
+          SELECT DISTINCT e.employee_id, e.name, 'float' as nurse_type
           FROM nurse_float nf
           JOIN nurse_schedule ns ON nf.employee_id = ns.employee_id
           JOIN employees e ON nf.employee_id = e.employee_id
-          WHERE nf.${dayColumn} = $1
-            AND ns.scheduling_time = $2
-            AND e.status = 'active'
+          WHERE nf.${dayColumn} = $1 AND ns.scheduling_time = $2 AND e.status = 'active'
           ORDER BY e.name
         `;
-
         const floatNurses = await pool.query(floatNursesQuery, [
           surgery.room_id,
           schedulingTime,
         ]);
 
-        // 5. 合併固定和流動護理師
-        const allNurses = [...fixedNurses.rows, ...floatNurses.rows];
-
         return {
           ...surgery,
-          nurses: allNurses,
+          nurses: [...fixedNurses.rows, ...floatNurses.rows],
         };
       })
     );
