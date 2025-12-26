@@ -55,6 +55,9 @@ const AddSchedulePage = () => {
   const [recommendLoading, setRecommendLoading] = useState(false);
   const [recommendError, setRecommendError] = useState(null);
   
+  // [新增] 額滿日期狀態
+  const [fullDates, setFullDates] = useState([]);
+
   // 病患預覽對話框
   const [patientPreviewDialog, setPatientPreviewDialog] = useState({
     open: false,
@@ -169,11 +172,35 @@ const AddSchedulePage = () => {
   };
 
   /**
-   * 獲取某個日期的排班狀態
-   * @param {Date} date - 要檢查的日期
-   * @returns {Object} { type, label, color, textColor }
+   * [新增] 檢查是否為額滿日期 (格式 YYYY-MM-DD)
+   */
+  const isFullDate = (date) => {
+    if (!fullDates.length) return false;
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return fullDates.includes(`${year}-${month}-${day}`);
+  };
+
+  /**
+   * [修改] 獲取某個日期的排班狀態
+   * 加入 isBlocking 屬性來判斷是否阻擋點擊
+   * 加入 'full' 狀態
    */
   const getDayScheduleStatus = (date) => {
+    // 1. 優先檢查是否為額滿日期 (來自演算法判定)
+    if (isFullDate(date)) {
+      return {
+        type: 'full',
+        label: '額滿',
+        bgColor: 'bg-red-50',
+        borderColor: 'border-red-200',
+        textColor: 'text-red-400',
+        dotColor: 'bg-red-500',
+        isBlocking: true // 禁止點選
+      };
+    }
+
     if (!doctorSchedule) return null;
 
     // 取得星期幾（中文）
@@ -185,7 +212,7 @@ const AddSchedulePage = () => {
     if (fullDaySchedule?.fullDay) {
       const type = fullDaySchedule.type;
       
-      // 手術日 - 橘紅色
+      // 手術日 - 橘紅色 (可點選)
       if (type === 'surgery') {
         return {
           type: 'surgery',
@@ -193,11 +220,12 @@ const AddSchedulePage = () => {
           bgColor: 'bg-orange-100',
           borderColor: 'border-orange-400',
           textColor: 'text-orange-700',
-          dotColor: 'bg-orange-500'
+          dotColor: 'bg-orange-500',
+          isBlocking: false
         };
       }
       
-      // 休假 - 灰色
+      // 休假 - 灰色 (禁止點選)
       if (type === 'off') {
         return {
           type: 'off',
@@ -205,11 +233,12 @@ const AddSchedulePage = () => {
           bgColor: 'bg-gray-100',
           borderColor: 'border-gray-400',
           textColor: 'text-gray-600',
-          dotColor: 'bg-gray-500'
+          dotColor: 'bg-gray-500',
+          isBlocking: true
         };
       }
       
-      // 全天門診 - 淺灰色
+      // 全天門診 - 淺灰色 (禁止點選)
       if (type === 'clinic') {
         return {
           type: 'clinic-fullday',
@@ -217,16 +246,16 @@ const AddSchedulePage = () => {
           bgColor: 'bg-gray-50',
           borderColor: 'border-gray-300',
           textColor: 'text-gray-600',
-          dotColor: 'bg-gray-400'
+          dotColor: 'bg-gray-400',
+          isBlocking: true
         };
       }
     }
     
-    // 檢查分時段排班
+    // 檢查分時段排班 (此處邏輯維持不變)
     const morningSchedule = doctorSchedule[`${dayOfWeek}上午`];
     const afternoonSchedule = doctorSchedule[`${dayOfWeek}下午`];
     
-    // 如果包含彈性時段，不標註顏色
     if (morningSchedule?.type === 'flexible' || afternoonSchedule?.type === 'flexible') {
       return null;
     }
@@ -267,7 +296,7 @@ const AddSchedulePage = () => {
   };
 
   /**
-   * ✅ 修改：搜尋病患資料 - 使用 patientService
+   * 搜尋病患資料 - 使用 patientService
    */
   const handlePatientSearch = async () => {
     if (!formData.patientId) {
@@ -331,7 +360,8 @@ const AddSchedulePage = () => {
   };
 
   /**
-   * 🎯 ✅ 修改：推薦手術日期 - 使用 IBRSAService
+   * 🎯 推薦手術日期 - 使用 IBRSAService
+   * [修改] 加入處理 fullDates 的邏輯
    */
   const handleRecommendDate = async () => {
     if (!validateForm()) {
@@ -348,6 +378,7 @@ const AddSchedulePage = () => {
     setRecommendLoading(true);
     setRecommendError(null);
     setRecommendedDates([]);
+    setFullDates([]); // 重置額滿日期
 
     try {
       const requestData = {
@@ -366,6 +397,11 @@ const AddSchedulePage = () => {
 
       console.log('📥 收到推薦結果:', data);
 
+      // [新增] 處理額滿日期
+      if (data.fullDates && Array.isArray(data.fullDates)) {
+        setFullDates(data.fullDates.map(fd => fd.date));
+      }
+
       if (data.success && data.recommendations && data.recommendations.length > 0) {
         const dates = data.recommendations.map(rec => ({
           date: new Date(rec.date + 'T00:00:00'),
@@ -380,8 +416,15 @@ const AddSchedulePage = () => {
         console.log('✅ 推薦成功:', dates.length, '個日期');
       } else {
         setRecommendedDates([]);
-        setRecommendError(data.message || '找不到適合的日期');
-        alert(data.message || '未來一個月內找不到適合的日期，請調整條件或聯絡排程人員');
+        // 即使推薦失敗，如果有額滿日期，這也是有用的資訊
+        const hasFullDates = data.fullDates && data.fullDates.length > 0;
+        
+        if (hasFullDates) {
+          alert(data.message || '找不到合適的推薦日期，部分日期因時數不足已標示為額滿。');
+        } else {
+          setRecommendError(data.message || '找不到適合的日期');
+          alert(data.message || '未來一個月內找不到適合的日期，請調整條件或聯絡排程人員');
+        }
       }
 
     } catch (error) {
@@ -427,10 +470,10 @@ const AddSchedulePage = () => {
   };
 
   /**
-   * 🚫 檢查日期是否可以選擇
-   * - 過去的日期不可選（含今天）
-   * - 今天和未來 3 天不可選（準備期）
-   * - 從第 4 天開始可選
+   * [修改] 檢查日期是否可以選擇
+   * - 過去的日期不可選
+   * - 準備期不可選
+   * - [新增] 排班狀態為 blocking (休假/看診/額滿) 不可選
    */
   const isDateSelectable = (date) => {
     const today = new Date();
@@ -443,13 +486,39 @@ const AddSchedulePage = () => {
     const preparationEndDate = new Date(today);
     preparationEndDate.setDate(today.getDate() + 3);
     
-    // 日期必須在準備期之後
-    return targetDate > preparationEndDate;
+    // 1. 日期必須在準備期之後 (此條件也包含了排除過去日期)
+    if (targetDate <= preparationEndDate) {
+      return false;
+    }
+
+    // 2. [新增] 檢查排班狀態是否為阻擋 (休假/看診/額滿)
+    const status = getDayScheduleStatus(date);
+    if (status && status.isBlocking) {
+      return false;
+    }
+    
+    return true;
   };
 
   /**
-   * 🆕 檢查日期是否在準備期內
-   * - 今天（含）到未來 3 天
+   * 檢查日期是否在準備期內 (或過去)
+   * 用於渲染時判斷是否要「完全反白」(不顯示任何狀態)
+   */
+  const isPreparationOrPast = (date) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const targetDate = new Date(date);
+    targetDate.setHours(0, 0, 0, 0);
+    
+    const preparationEndDate = new Date(today);
+    preparationEndDate.setDate(today.getDate() + 3);
+    
+    return targetDate <= preparationEndDate;
+  };
+
+  /**
+   * 檢查日期是否在準備期內 (僅用於顯示 "準備期" 文字)
    */
   const isInPreparationPeriod = (date) => {
     const today = new Date();
@@ -461,7 +530,6 @@ const AddSchedulePage = () => {
     const preparationEndDate = new Date(today);
     preparationEndDate.setDate(today.getDate() + 3);
     
-    // 在今天（含）到準備期結束日期之間
     return targetDate >= today && targetDate <= preparationEndDate;
   };
 
@@ -508,8 +576,6 @@ const AddSchedulePage = () => {
 
       try {
         console.log('執行自動排程檢查...');
-        // 方案 A (依照演算法閾值): await tshsoSchedulingService.checkAndTrigger();
-        
         // 直接觸發更新
         await tshsoSchedulingService.triggerScheduling(); 
         console.log('✅ 自動排程更新完成');
@@ -531,6 +597,7 @@ const AddSchedulePage = () => {
       });
       setSelectedDate(null);
       setRecommendedDates([]);
+      setFullDates([]); // 重置
       setShowRecommendation(false);
       setRecommendError(null);
 
@@ -578,6 +645,11 @@ const AddSchedulePage = () => {
                 <div className="flex items-center gap-1">
                   <div className="w-3 h-3 rounded-full bg-green-500"></div>
                   <span className="text-gray-700">推薦日期</span>
+                </div>
+                {/* 新增額滿圖例 */}
+                <div className="flex items-center gap-1">
+                  <X className="w-3 h-3 text-red-500" />
+                  <span className="text-gray-700">已額滿</span>
                 </div>
               </div>
             </div>
@@ -658,9 +730,14 @@ const AddSchedulePage = () => {
                 targetDate.setHours(0, 0, 0, 0);
                 
                 const isToday = targetDate.getTime() === today.getTime();
-                const isPast = targetDate < today; // 過去的日期（不含今天）
-                const isPreparation = isInPreparationPeriod(date); // 準備期（含今天）
-                const isSelectable = isDateSelectable(date); // 可選擇
+                
+                // 1. 基本時間判定
+                const isPrepText = isInPreparationPeriod(date); // 僅用於顯示文字 "準備期"
+                const isPrepOrPast = isPreparationOrPast(date); // 用於樣式：完全反白
+                
+                // 2. 狀態與可選性
+                const scheduleStatus = getDayScheduleStatus(date); // 取得狀態 (包含 Full/Off/Clinic/Surgery)
+                const isSelectable = isDateSelectable(date);       // 是否可點擊
                 
                 const isSelected = selectedDate && 
                   date.getDate() === selectedDate.getDate() &&
@@ -670,11 +747,10 @@ const AddSchedulePage = () => {
                 const isRecommended = isRecommendedDate(date);
                 const recommendation = isRecommended ? getRecommendationScore(date) : null;
                 
-                // 取得排班狀態
-                const scheduleStatus = getDayScheduleStatus(date);
-
-                // 不可選的日期不載入排班
-                const displayScheduleStatus = isSelectable ? scheduleStatus : null;
+                // 3. 決定要顯示的狀態
+                // 如果是 "準備期或過去"，不顯示狀態顏色 (維持反白)。
+                // 否則，如果有狀態 (即使是不可選的休假/額滿)，也要顯示該狀態。
+                const displayScheduleStatus = isPrepOrPast ? null : scheduleStatus;
 
                 return (
                   <button
@@ -683,34 +759,56 @@ const AddSchedulePage = () => {
                     disabled={!isSelectable}
                     className={`
                       rounded-lg border-2 transition-all duration-200 relative min-h-[70px] flex items-center justify-center
-                      ${!isSelectable ? 'bg-gray-50 text-gray-300 cursor-not-allowed border-gray-200' : 'hover:bg-gray-50 cursor-pointer'}
+                      
+                      ${/* 樣式邏輯： */ ''}
+                      ${/* 1. 如果是準備期或過去：維持原有的灰色反白 */ ''}
+                      ${isPrepOrPast ? 'bg-gray-50 text-gray-300 cursor-not-allowed border-gray-200' : ''}
+                      
+                      ${/* 2. 如果不是準備期/過去，但有排班狀態 (休假/額滿/看診/手術)：使用狀態顏色 */ ''}
+                      ${!isPrepOrPast && displayScheduleStatus && !isSelected && !isRecommended ? displayScheduleStatus.bgColor + ' ' + displayScheduleStatus.borderColor : ''}
+                      
+                      ${/* 3. 如果是可選的手術日/空日，加入 hover */ ''}
+                      ${isSelectable ? 'hover:bg-gray-50 cursor-pointer' : (!isPrepOrPast ? 'cursor-not-allowed' : '')}
+                      
+                      ${/* 4. 今天樣式 */ ''}
                       ${isToday && isSelectable ? 'ring-2 ring-blue-500' : ''}
-                      ${isSelected ? 'bg-blue-600 text-white hover:bg-blue-700 border-blue-600' : isSelectable ? 'text-gray-700' : ''}
+                      
+                      ${/* 5. 選中樣式 */ ''}
+                      ${isSelected ? 'bg-blue-600 text-white hover:bg-blue-700 border-blue-600' : ''}
+                      
+                      ${/* 6. 推薦樣式 */ ''}
                       ${isRecommended && !isSelected && isSelectable ? 'bg-green-50 ring-2 ring-green-400 border-green-400' : ''}
-                      ${displayScheduleStatus && !isSelected && !isRecommended && isSelectable ? displayScheduleStatus.bgColor + ' ' + displayScheduleStatus.borderColor : !displayScheduleStatus && isSelectable && !isRecommended && !isSelected ? 'border-gray-200' : ''}
+
+                      ${/* 補強：若無狀態且可選且未選中，給預設邊框 */ ''}
+                      ${!isPrepOrPast && !displayScheduleStatus && isSelectable && !isSelected && !isRecommended ? 'border-gray-200' : ''}
                     `}
                   >
                     <div className="flex flex-col items-center justify-center h-full">
                       {/* 日期數字 */}
                       <span className={`text-xs font-medium ${
                         isSelected ? 'text-white' : 
-                        !isSelectable ? 'text-gray-300' :
+                        isPrepOrPast ? 'text-gray-300' :
                         displayScheduleStatus?.textColor || 'text-gray-700'
                       }`}>
                         {date.getDate()}
                       </span>
                       
-                      {/* 排班狀態指示器 */}
-                      {displayScheduleStatus && !isSelected && !isRecommended && isSelectable && (
+                      {/* 排班狀態指示器 (顯示於非選中、非推薦時) */}
+                      {displayScheduleStatus && !isSelected && !isRecommended && (
                         <div className="flex items-center gap-0.5 mt-0.5">
-                          {displayScheduleStatus.type === 'clinic-fullday' && (
-                            <>
-                              <div className={`w-1.5 h-1.5 rounded-full ${displayScheduleStatus.dotColor}`}></div>
-                              <span className={`text-[8px] font-bold ${displayScheduleStatus.textColor}`}>
-                                {displayScheduleStatus.label}
-                              </span>
-                            </>
+                          {displayScheduleStatus.type === 'full' ? (
+                             // 額滿顯示 X icon
+                             <X className="w-3 h-3 text-red-400" />
+                          ) : (
+                             // 其他狀態 (看診/休假/手術) 顯示圓點
+                             <>
+                               {displayScheduleStatus.dotColor && <div className={`w-1.5 h-1.5 rounded-full ${displayScheduleStatus.dotColor}`}></div>}
+                             </>
                           )}
+                          
+                          <span className={`text-[8px] font-bold ${displayScheduleStatus.textColor}`}>
+                            {displayScheduleStatus.label}
+                          </span>
                         </div>
                       )}
                       
@@ -727,7 +825,7 @@ const AddSchedulePage = () => {
                       )}
                       
                       {/* 準備期標記 - 顯示在今天和未來3天 */}
-                      {isPreparation && (
+                      {isPrepText && (
                         <div className="mt-0.5">
                           <span className="text-[8px] text-gray-400 font-medium">
                             準備期
@@ -739,7 +837,7 @@ const AddSchedulePage = () => {
                     {/* 已選擇標記 */}
                     {isSelected && (
                       <div className="absolute top-0.5 right-0.5">
-                        <CheckCircle className="w-3 h-3" />
+                        <CheckCircle className="w-3 h-3 text-white" />
                       </div>
                     )}
                   </button>
