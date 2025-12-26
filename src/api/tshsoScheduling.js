@@ -1,5 +1,5 @@
 // src/api/tshsoScheduling.js
-// 手術排程 API (Node.js Express) - 完整版
+// 手術排程 API (Node.js Express) - 完整版 (含鎖定近期排程功能)
 
 import express from "express";
 import { requireAuth } from "./middleware/checkAuth.js";
@@ -83,23 +83,28 @@ const executeSchedulingLogic = async (
 
   try {
     // --- Step 1: 找出需要重排的日期 ---
+    // [修正重點]：加入鎖定期間 (Frozen Period) 限制
+    // 排除 今日 + 未來3天 的排程，只更新第 4 天以後的資料
+    const frozenCondition = `AND surgery_date > CURRENT_DATE + INTERVAL '3 days'`;
+
     let targetDatesQuery = "";
     let targetDatesParams = [];
 
     if (forceAllFuture) {
-      // [模式 A] 啟動時：找出所有 "今天以後" 且 "有未完成手術(scheduled/pending)" 的日期
+      // [模式 A] 啟動時：找出所有 "鎖定期間以後" 且 "有未完成手術" 的日期
       targetDatesQuery = `
         SELECT DISTINCT surgery_date 
         FROM surgery 
-        WHERE surgery_date >= CURRENT_DATE
-        AND status IN ('pending', 'scheduled')
+        WHERE status IN ('pending', 'scheduled')
+        ${frozenCondition}
       `;
     } else {
-      // [模式 B] 定期檢查：只針對 "有新掛號(pending)" 的日期進行重排
+      // [模式 B] 定期檢查：只針對 "有新掛號(pending)" 且 "在鎖定期間以後" 的日期進行重排
       targetDatesQuery = `
         SELECT DISTINCT surgery_date 
         FROM surgery 
         WHERE status = 'pending'
+        ${frozenCondition}
         ${date_range ? "AND surgery_date BETWEEN $1 AND $2" : ""}
       `;
       if (date_range) targetDatesParams = [date_range.start, date_range.end];
@@ -116,18 +121,20 @@ const executeSchedulingLogic = async (
     );
 
     if (targetDates.length === 0) {
-      console.log("[TS-HSO] 目前無須重排的日期，流程結束。");
+      console.log(
+        "[TS-HSO] 目前無須重排的日期 (或日期皆在鎖定期間內)，流程結束。"
+      );
       return { success: true, message: "無待排程手術" };
     }
 
     console.log(
-      `[TS-HSO] 目標重排日期 (${targetDates.length}天): ${targetDates.join(
-        ", "
-      )}`
+      `[TS-HSO] 目標重排日期 (已略過前3天, 共${
+        targetDates.length
+      }天): ${targetDates.join(", ")}`
     );
 
     // --- Step 2: 讀取這些日期的「所有」手術 (包含 scheduled 和 pending) ---
-    // 全域重排關鍵：抓取所有手術重新洗牌
+    // 這裡只會抓取 targetDates 內的手術，因此前3天的手術自然會被排除
     const surgeriesQuery = `
       SELECT 
         surgery_id, doctor_id, assistant_doctor_id,
@@ -267,7 +274,7 @@ const executeSchedulingLogic = async (
     try {
       await client.query("BEGIN");
 
-      // 5.1 清除這些日期所有的舊排程 (避免衝突)
+      // 5.1 清除這些日期所有的舊排程 (只清除 targetDates 內的，確保前3天的不被動到)
       const deleteQuery = `
         DELETE FROM surgery_correct_time 
         WHERE surgery_id IN (
@@ -318,7 +325,6 @@ const executeSchedulingLogic = async (
     console.log("手術ID      | 手術室 | 時段            | AHP分數");
     console.log("------------|--------|-----------------|---------");
 
-    // 依日期和手術室排序顯示
     const sortedResults = pythonResult.results.sort((a, b) => {
       if (a.room_id === b.room_id) {
         return a.start_time.localeCompare(b.start_time);
@@ -335,7 +341,7 @@ const executeSchedulingLogic = async (
         )} | ${res.start_time.substring(0, 5)}-${res.end_time.substring(
           0,
           5
-        )}   | ${score}`
+        )}    | ${score}`
       );
     });
     console.log("==================================================\n");
@@ -374,8 +380,6 @@ const runScheduledJob = async (isStartup = false) => {
     }
 
     // 2. 執行排程
-    // isStartup = true -> 強制全域重排所有未來手術
-    // isStartup = false -> 只針對有新掛號的日子重排
     const result = await executeSchedulingLogic(null, isStartup);
 
     if (result && result.success && result.data && result.data.length > 0) {
@@ -393,21 +397,19 @@ export const startPeriodicScheduleService = () => {
 
   console.log(`[TS-HSO] ✅ 排程服務已啟動 (週期: ${INTERVAL_MINUTES}分)`);
 
-  // 設定定期執行 (每 5 分鐘跑一般檢查)
   setInterval(async () => {
     await runScheduledJob(false);
   }, INTERVAL_MINUTES * 60 * 1000);
 
-  // 伺服器啟動時，立即執行一次 (Startup模式：全域重排)
-  // 使用 setTimeout稍微延遲 3 秒，確保 DB 連線池已完全就緒
   setTimeout(() => {
     runScheduledJob(true);
   }, 3000);
 };
 
+// ... (Router endpoints 保持不變) ...
+
 /**
  * POST /api/tshso-scheduling/trigger
- * 手動觸發排程
  */
 router.post("/trigger", requireAuth, async (req, res) => {
   try {
@@ -425,17 +427,14 @@ router.post("/trigger", requireAuth, async (req, res) => {
 
 /**
  * POST /api/tshso-scheduling/auto-check
- * 自動檢查並觸發排程 (給前端新增手術後呼叫)
  */
 router.post("/auto-check", requireAuth, async (req, res) => {
   try {
-    // 檢查是否有待排程手術
     const countResult = await pool.query(
       `SELECT COUNT(*) as count FROM surgery WHERE status = 'pending'`
     );
     const pendingCount = parseInt(countResult.rows[0].count);
 
-    // 這裡您可以設定閾值，例如 pendingCount >= 1 就觸發
     if (pendingCount > 0) {
       console.log(
         `[Auto-Check] 發現 ${pendingCount} 筆待排程手術，執行排程...`
@@ -462,29 +461,25 @@ router.post("/auto-check", requireAuth, async (req, res) => {
   }
 });
 
+// ... (其餘 router.get 等端點代碼保持原樣即可) ...
+// (pending/count, pending, results/range, results/all_scheduled, results/:date, delete/schedule, room/:roomId)
+
 /**
  * GET /api/tshso-scheduling/pending/count
- * 取得待排程數量 (可選日期範圍，並回傳最後排程時間)
  */
 router.get("/pending/count", requireAuth, async (req, res) => {
   try {
     const { start_date, end_date } = req.query;
-
     let query = `SELECT COUNT(*) as count FROM surgery WHERE status = 'pending'`;
     let params = [];
-
-    // 如果有提供日期，加入過濾條件
     if (start_date && end_date) {
       query += ` AND surgery_date BETWEEN $1 AND $2`;
       params = [start_date, end_date];
     }
-
     const result = await pool.query(query, params);
-
     res.json({
       success: true,
       count: parseInt(result.rows[0].count),
-      // 回傳伺服器記錄的最後演算法執行時間
       last_updated: lastScheduleTime ? lastScheduleTime.toISOString() : null,
     });
   } catch (error) {
@@ -497,22 +492,15 @@ router.get("/pending/count", requireAuth, async (req, res) => {
   }
 });
 
-/**
- * GET /api/tshso-scheduling/pending
- * 取得待排程清單 (包含完整資訊) - 這是清單視窗需要的 API
- */
 router.get("/pending", requireAuth, async (req, res) => {
   try {
     const { start_date, end_date } = req.query;
-
-    // 檢查參數
     if (!start_date || !end_date) {
       return res.status(400).json({
         success: false,
         error: "請提供 start_date 和 end_date",
       });
     }
-
     const query = `
       SELECT s.*, st.surgery_name, e1.name as doctor_name, e2.name as assistant_doctor_name, 
              p.name as patient_name, p.id_number as patient_id_number, d.name as department_name, 
@@ -527,54 +515,31 @@ router.get("/pending", requireAuth, async (req, res) => {
       WHERE s.status = 'pending' AND s.surgery_date BETWEEN $1 AND $2
       ORDER BY s.surgery_date, s.created_at
     `;
-
     const result = await pool.query(query, [start_date, end_date]);
-
-    res.json({
-      success: true,
-      data: result.rows,
-      total: result.rows.length,
-    });
+    res.json({ success: true, data: result.rows, total: result.rows.length });
   } catch (error) {
-    console.error("取得待排程清單失敗:", error);
-    res.status(500).json({
-      success: false,
-      error: "取得待排程清單失敗",
-      message: error.message,
-    });
+    res
+      .status(500)
+      .json({
+        success: false,
+        error: "取得待排程清單失敗",
+        message: error.message,
+      });
   }
 });
 
-/**
- * GET /api/tshso-scheduling/results/range
- * 取得日期範圍的排程結果
- */
 router.get("/results/range", requireAuth, async (req, res) => {
   try {
     const { start_date, end_date } = req.query;
-
     if (!start_date || !end_date) {
-      return res.status(400).json({
-        success: false,
-        error: "請提供 start_date 和 end_date",
-      });
+      return res
+        .status(400)
+        .json({ success: false, error: "請提供 start_date 和 end_date" });
     }
-
     const query = `
-      SELECT 
-        sct.surgery_id,
-        sct.room_id,
-        sct.start_time,
-        sct.end_time,
-        sct.cleanup_end_time,
-        s.surgery_date,
-        s.surgery_type_code,
-        s.doctor_id,
-        s.duration,
-        st.surgery_name,
-        e1.name as doctor_name,
-        p.name as patient_name,
-        sr.room_type
+      SELECT sct.surgery_id, sct.room_id, sct.start_time, sct.end_time, sct.cleanup_end_time,
+        s.surgery_date, s.surgery_type_code, s.doctor_id, s.duration, st.surgery_name,
+        e1.name as doctor_name, p.name as patient_name, sr.room_type
       FROM surgery_correct_time sct
       JOIN surgery s ON sct.surgery_id = s.surgery_id
       LEFT JOIN surgery_type_code st ON s.surgery_type_code = st.surgery_code
@@ -584,47 +549,25 @@ router.get("/results/range", requireAuth, async (req, res) => {
       WHERE s.surgery_date BETWEEN $1 AND $2
       ORDER BY s.surgery_date, sct.room_id, sct.start_time
     `;
-
     const result = await pool.query(query, [start_date, end_date]);
-
-    res.json({
-      success: true,
-      data: result.rows,
-      total: result.rows.length,
-    });
+    res.json({ success: true, data: result.rows, total: result.rows.length });
   } catch (error) {
-    console.error("取得排程結果失敗:", error);
-    res.status(500).json({
-      success: false,
-      error: "取得排程結果失敗",
-      message: error.message,
-    });
+    res
+      .status(500)
+      .json({
+        success: false,
+        error: "取得排程結果失敗",
+        message: error.message,
+      });
   }
 });
 
-/**
- * GET /api/tshso-scheduling/results/all_scheduled
- * 取得「所有」已排程的手術資料 (優化前端效能用)
- * 直接撈取 surgery_correct_time 並關聯 surgery 資訊
- */
 router.get("/results/all_scheduled", requireAuth, async (req, res) => {
   try {
     const query = `
-      SELECT 
-        sct.surgery_id,
-        sct.room_id,
-        sct.start_time,
-        sct.end_time,
-        sct.cleanup_end_time,
-        s.surgery_date,
-        s.surgery_type_code,
-        s.doctor_id,
-        s.duration,
-        s.status,
-        st.surgery_name,
-        e.name as doctor_name,
-        p.name as patient_name,
-        sr.room_type
+      SELECT sct.surgery_id, sct.room_id, sct.start_time, sct.end_time, sct.cleanup_end_time,
+        s.surgery_date, s.surgery_type_code, s.doctor_id, s.duration, s.status,
+        st.surgery_name, e.name as doctor_name, p.name as patient_name, sr.room_type
       FROM surgery_correct_time sct
       JOIN surgery s ON sct.surgery_id = s.surgery_id
       LEFT JOIN surgery_type_code st ON s.surgery_type_code = st.surgery_code
@@ -633,49 +576,27 @@ router.get("/results/all_scheduled", requireAuth, async (req, res) => {
       LEFT JOIN surgery_room sr ON sct.room_id = sr.id
       ORDER BY s.surgery_date, sct.room_id, sct.start_time
     `;
-
     const result = await pool.query(query);
-
-    res.json({
-      success: true,
-      data: result.rows,
-      total: result.rows.length,
-    });
+    res.json({ success: true, data: result.rows, total: result.rows.length });
   } catch (error) {
-    console.error("取得所有排程結果失敗:", error);
-    res.status(500).json({
-      success: false,
-      error: "取得排程結果失敗",
-      message: error.message,
-    });
+    res
+      .status(500)
+      .json({
+        success: false,
+        error: "取得排程結果失敗",
+        message: error.message,
+      });
   }
 });
 
-/**
- * GET /api/tshso-scheduling/results/:date
- * 取得指定日期的排程結果
- */
 router.get("/results/:date", requireAuth, async (req, res) => {
   try {
     const { date } = req.params;
-
     const query = `
-      SELECT 
-        sct.surgery_id,
-        sct.room_id,
-        sct.start_time,
-        sct.end_time,
-        sct.cleanup_end_time,
-        s.surgery_date,
-        s.surgery_type_code,
-        s.doctor_id,
-        s.assistant_doctor_id,
-        s.duration,
-        st.surgery_name,
-        e1.name as doctor_name,
-        e2.name as assistant_doctor_name,
-        p.name as patient_name,
-        sr.room_type
+      SELECT sct.surgery_id, sct.room_id, sct.start_time, sct.end_time, sct.cleanup_end_time,
+        s.surgery_date, s.surgery_type_code, s.doctor_id, s.assistant_doctor_id, s.duration,
+        st.surgery_name, e1.name as doctor_name, e2.name as assistant_doctor_name,
+        p.name as patient_name, sr.room_type
       FROM surgery_correct_time sct
       JOIN surgery s ON sct.surgery_id = s.surgery_id
       LEFT JOIN surgery_type_code st ON s.surgery_type_code = st.surgery_code
@@ -686,56 +607,36 @@ router.get("/results/:date", requireAuth, async (req, res) => {
       WHERE s.surgery_date = $1
       ORDER BY sct.room_id, sct.start_time
     `;
-
     const result = await pool.query(query, [date]);
-
-    res.json({
-      success: true,
-      data: result.rows,
-    });
+    res.json({ success: true, data: result.rows });
   } catch (error) {
-    console.error("取得排程結果失敗:", error);
-    res.status(500).json({
-      success: false,
-      error: "取得排程結果失敗",
-      message: error.message,
-    });
+    res
+      .status(500)
+      .json({
+        success: false,
+        error: "取得排程結果失敗",
+        message: error.message,
+      });
   }
 });
 
-/**
- * DELETE /api/tshso-scheduling/schedule/:surgeryId
- * 刪除排程記錄
- */
 router.delete("/schedule/:surgeryId", requireAuth, async (req, res) => {
   try {
     const { surgeryId } = req.params;
-
     const client = await pool.connect();
-
     try {
       await client.query("BEGIN");
-
-      // 刪除排程
       await client.query(
         `DELETE FROM surgery_correct_time WHERE surgery_id = $1`,
         [surgeryId]
       );
-
-      // 將手術狀態改回 pending
       await client.query(
         `UPDATE surgery SET status = 'pending' WHERE surgery_id = $1`,
         [surgeryId]
       );
-
       await client.query("COMMIT");
-
       console.log(`✅ 已刪除手術 ${surgeryId} 的排程`);
-
-      res.json({
-        success: true,
-        message: "排程已刪除",
-      });
+      res.json({ success: true, message: "排程已刪除" });
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -743,45 +644,22 @@ router.delete("/schedule/:surgeryId", requireAuth, async (req, res) => {
       client.release();
     }
   } catch (error) {
-    console.error("刪除排程失敗:", error);
-    res.status(500).json({
-      success: false,
-      error: "刪除排程失敗",
-      message: error.message,
-    });
+    res
+      .status(500)
+      .json({ success: false, error: "刪除排程失敗", message: error.message });
   }
 });
 
-/**
- * GET /api/tshso-scheduling/room/:roomId
- * 取得指定手術室的排程
- */
 router.get("/room/:roomId", requireAuth, async (req, res) => {
   try {
     const { roomId } = req.params;
     const { date } = req.query;
-
-    if (!date) {
-      return res.status(400).json({
-        success: false,
-        error: "請提供 date",
-      });
-    }
-
+    if (!date)
+      return res.status(400).json({ success: false, error: "請提供 date" });
     const query = `
-      SELECT 
-        sct.surgery_id,
-        sct.room_id,
-        sct.start_time,
-        sct.end_time,
-        sct.cleanup_end_time,
-        s.surgery_date,
-        s.surgery_type_code,
-        s.doctor_id,
-        s.duration,
-        st.surgery_name,
-        e.name as doctor_name,
-        p.name as patient_name
+      SELECT sct.surgery_id, sct.room_id, sct.start_time, sct.end_time, sct.cleanup_end_time,
+        s.surgery_date, s.surgery_type_code, s.doctor_id, s.duration, st.surgery_name,
+        e.name as doctor_name, p.name as patient_name
       FROM surgery_correct_time sct
       JOIN surgery s ON sct.surgery_id = s.surgery_id
       LEFT JOIN surgery_type_code st ON s.surgery_type_code = st.surgery_code
@@ -790,20 +668,16 @@ router.get("/room/:roomId", requireAuth, async (req, res) => {
       WHERE sct.room_id = $1 AND s.surgery_date = $2
       ORDER BY sct.start_time
     `;
-
     const result = await pool.query(query, [roomId, date]);
-
-    res.json({
-      success: true,
-      data: result.rows,
-    });
+    res.json({ success: true, data: result.rows });
   } catch (error) {
-    console.error("取得手術室排程失敗:", error);
-    res.status(500).json({
-      success: false,
-      error: "取得手術室排程失敗",
-      message: error.message,
-    });
+    res
+      .status(500)
+      .json({
+        success: false,
+        error: "取得手術室排程失敗",
+        message: error.message,
+      });
   }
 });
 
