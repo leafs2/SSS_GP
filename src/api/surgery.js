@@ -372,7 +372,7 @@ router.get("/monthly", requireAuth, async (req, res) => {
 
     const endDate = new Date(lastDay);
     // 多加 7 天作為緩衝，確保前端若渲染 6 行也能抓到資料
-    endDate.setDate(lastDay.getDate() + diffToSunday + 7);
+    endDate.setDate(lastDay.getDate() + diffToSunday);
     // --- 修改結束 ---
 
     let sql = `
@@ -522,6 +522,88 @@ router.get("/monthly", requireAuth, async (req, res) => {
   } catch (error) {
     console.error("獲取月排程失敗:", error);
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * DELETE /api/surgery/:surgeryId
+ * 刪除手術排程
+ * 說明：會同時刪除 surgery_correct_time 和 resource_occupation 中的關聯資料
+ */
+router.delete("/:surgeryId", requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { surgeryId } = req.params;
+    const { role, employee_id } = req.session.user;
+
+    // 檢查權限：只有醫生可以刪除，且通常只能刪除自己的 (或視貴院流程而定)
+    // 這裡先寬鬆檢查是否為醫生
+    if (role !== "D") {
+      return res
+        .status(403)
+        .json({ success: false, message: "權限不足，只有醫師可刪除排程" });
+    }
+
+    await client.query("BEGIN");
+
+    // 1. 檢查手術是否存在以及狀態
+    const checkResult = await client.query(
+      `SELECT status, doctor_id FROM surgery WHERE surgery_id = $1`,
+      [surgeryId]
+    );
+
+    if (checkResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ success: false, message: "找不到該手術" });
+    }
+
+    const surgery = checkResult.rows[0];
+
+    // 額外安全檢查：確認是否為該醫師的手術 (可選，視需求決定是否註解掉)
+    if (surgery.doctor_id !== employee_id) {
+      await client.query("ROLLBACK");
+      return res
+        .status(403)
+        .json({ success: false, message: "您只能刪除自己的手術排程" });
+    }
+
+    if (surgery.status === "completed" || surgery.status === "in-progress") {
+      await client.query("ROLLBACK");
+      return res
+        .status(400)
+        .json({ success: false, message: "無法刪除已經開始或完成的手術" });
+    }
+
+    // 2. 刪除 resource_occupation (資源佔用)
+    // 根據 Schema，resource_occupation 有 surgery_id 欄位
+    await client.query(
+      `DELETE FROM resource_occupation WHERE surgery_id = $1`,
+      [surgeryId]
+    );
+
+    // 3. 刪除 surgery_correct_time (排程確認時間)
+    await client.query(
+      `DELETE FROM surgery_correct_time WHERE surgery_id = $1`,
+      [surgeryId]
+    );
+
+    // 4. 刪除 surgery (主表)
+    await client.query(`DELETE FROM surgery WHERE surgery_id = $1`, [
+      surgeryId,
+    ]);
+
+    await client.query("COMMIT");
+    console.log(`✅ 手術 ${surgeryId} 已刪除`);
+
+    res.json({ success: true, message: "手術排程已刪除" });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("刪除手術失敗:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "刪除手術失敗", error: error.message });
+  } finally {
+    client.release();
   }
 });
 
