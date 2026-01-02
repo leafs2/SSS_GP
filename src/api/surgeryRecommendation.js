@@ -143,17 +143,35 @@ async function checkDoctorAvailability(
 
     const dateList = candidateDates.map((d) => d.date);
     const workloadResult = await pool.query(
-      `SELECT date, total_scheduled_hours, surgery_count 
+      `SELECT 
+         date::text as date_str,
+         total_scheduled_hours, 
+         surgery_count 
        FROM doctor_daily_workload 
-       WHERE employee_id = $1 AND date = ANY($2)`,
+       WHERE employee_id = $1 
+         AND date IN (SELECT unnest($2::date[]))
+       ORDER BY date`,
       [doctorId, dateList]
+    );
+
+    console.log(
+      `📊 [DEBUG] 醫師 ${doctorId} 查詢到的工作負載筆數:`,
+      workloadResult.rows.length
+    );
+    console.log(`📊 [DEBUG] 候選日期數量:`, dateList.length);
+    console.log(`📊 [DEBUG] 候選日期列表:`, dateList);
+    console.log(
+      `📊 [DEBUG] 工作負載詳細資料:`,
+      workloadResult.rows.map(
+        (r) => `${r.date_str}: ${r.total_scheduled_hours}hr`
+      )
     );
 
     const workloadMap = {};
     workloadResult.rows.forEach((row) => {
-      workloadMap[row.date] = {
+      workloadMap[row.date_str] = {
         scheduledHours: parseFloat(row.total_scheduled_hours) || 0,
-        surgeryCount: parseInt(row.count) || 0,
+        surgeryCount: parseInt(row.surgery_count) || 0,
       };
     });
 
@@ -166,7 +184,10 @@ async function checkDoctorAvailability(
       const scheduleType = weekSchedule[weekday];
       const typeInfo = scheduleTypes[scheduleType];
 
-      if (!typeInfo) continue;
+      if (!typeInfo) {
+        console.log(`⚠️ [DEBUG] 日期 ${date} 無排班類型資訊`);
+        continue;
+      }
 
       const availableHours = typeInfo.availableHours;
 
@@ -178,15 +199,55 @@ async function checkDoctorAvailability(
         scheduledHours: 0,
         surgeryCount: 0,
       };
+
       const scheduledHours = workload.scheduledHours;
       const remainingHours = availableHours - scheduledHours;
 
+      // ⭐ 情況1: 已完全額滿
+      if (scheduledHours >= availableHours) {
+        console.log(
+          `⛔ [額滿] ${date} 已超過可用時數 (${scheduledHours} >= ${availableHours})`
+        );
+        fullDates.push({
+          date,
+          weekdayDisplay,
+          remainingHours: 0,
+          scheduledHours,
+          availableHours,
+          reason: "doctor_fully_booked",
+        });
+        continue;
+      }
+
+      // ⭐ 情況2: 剩餘時數不足
       if (remainingHours < surgeryDuration) {
+        console.log(
+          `⛔ [額滿] ${date} 剩餘時數不足 (${remainingHours} < ${surgeryDuration})`
+        );
         fullDates.push({
           date,
           weekdayDisplay,
           remainingHours,
-          reason: "doctor_full",
+          scheduledHours,
+          availableHours,
+          reason: "doctor_insufficient_hours",
+        });
+        continue;
+      }
+
+      // ⭐ 情況3: 加入後會超過上限
+      const totalAfterAdding = scheduledHours + surgeryDuration;
+      if (totalAfterAdding > availableHours) {
+        console.log(
+          `⛔ [額滿] ${date} 加入後會超限 (${scheduledHours}+${surgeryDuration}=${totalAfterAdding} > ${availableHours})`
+        );
+        fullDates.push({
+          date,
+          weekdayDisplay,
+          remainingHours,
+          scheduledHours,
+          availableHours,
+          reason: "doctor_would_exceed_capacity",
         });
         continue;
       }
@@ -215,10 +276,15 @@ async function checkDoctorAvailability(
       });
     }
 
+    console.log(`\n📊 [總結] 可用日期: ${availableDates.length} 個`);
+    console.log(`📊 [總結] 額滿日期: ${fullDates.length} 個`);
     if (fullDates.length > 0) {
       console.log(
-        "⛔ 主刀醫師額滿日期:",
-        fullDates.map((d) => `${d.date} (${d.remainingHours}hr)`)
+        "⛔ 額滿日期明細:",
+        fullDates.map(
+          (d) =>
+            `${d.date} (已排${d.scheduledHours}/${d.availableHours}hr, ${d.reason})`
+        )
       );
     }
 
@@ -238,6 +304,7 @@ async function checkAssistantAvailability(
   surgeryDuration
 ) {
   try {
+    // 1. 查詢助手值班日期
     const onDutyResult = await pool.query(
       `SELECT date FROM assistant_doctor_scheduling 
        WHERE employee_id = $1`,
@@ -248,18 +315,41 @@ async function checkAssistantAvailability(
       onDutyResult.rows.map((row) => formatDate(new Date(row.date)))
     );
 
-    // [修正] 改為查詢 doctor_daily_workload
+    console.log(
+      `👨‍⚕️ [DEBUG] 助手 ${assistantId} 值班日期:`,
+      Array.from(onDutyDates)
+    );
+
+    // 2. ⭐⭐⭐ 查詢助手的工作負載（與主刀醫師相同的邏輯）
     const dateList = candidateDates.map((d) => d.date);
+
     const workloadResult = await pool.query(
-      `SELECT date, total_scheduled_hours, surgery_count 
+      `SELECT 
+         date::text as date_str,
+         total_scheduled_hours, 
+         surgery_count 
        FROM doctor_daily_workload 
-       WHERE employee_id = $1 AND date = ANY($2)`,
+       WHERE employee_id = $1 
+         AND date IN (SELECT unnest($2::date[]))
+       ORDER BY date`,
       [assistantId, dateList]
+    );
+
+    console.log(
+      `📊 [DEBUG] 助手 ${assistantId} 查詢到的工作負載筆數:`,
+      workloadResult.rows.length
+    );
+    console.log(
+      `📊 [DEBUG] 助手工作負載詳細:`,
+      workloadResult.rows.map(
+        (r) =>
+          `${r.date_str}: ${r.total_scheduled_hours}hr (${r.surgery_count}台)`
+      )
     );
 
     const assistantWorkload = {};
     workloadResult.rows.forEach((row) => {
-      assistantWorkload[row.date] = {
+      assistantWorkload[row.date_str] = {
         totalHours: parseFloat(row.total_scheduled_hours) || 0,
         surgeryCount: parseInt(row.surgery_count) || 0,
       };
@@ -271,31 +361,81 @@ async function checkAssistantAvailability(
     for (const candidate of candidateDates) {
       const { date, dateObj, weekdayDisplay } = candidate;
 
+      // 3. 檢查前一天是否值班（維持原邏輯）
       const yesterday = new Date(dateObj);
       yesterday.setDate(yesterday.getDate() - 1);
       const yesterdayStr = formatDate(yesterday);
 
       if (onDutyDates.has(yesterdayStr)) {
-        continue;
-      }
-
-      const workload = assistantWorkload[date] || {
-        totalHours: 0,
-        surgeryCount: 0,
-      };
-      const totalHours = workload.totalHours;
-      const remainingHours = CONSTANTS.ASSISTANT_MAX_HOURS - totalHours;
-
-      if (remainingHours < surgeryDuration) {
+        console.log(`⛔ [助手] ${date} 前一天值班，不可排`);
         fullDates.push({
           date,
           weekdayDisplay,
-          remainingHours,
-          reason: "assistant_full",
+          remainingHours: 0,
+          reason: "assistant_on_duty_yesterday",
         });
         continue;
       }
 
+      // 4. ⭐⭐⭐ 檢查助手當天的工作負載
+      const workload = assistantWorkload[date] || {
+        totalHours: 0,
+        surgeryCount: 0,
+      };
+
+      const totalHours = workload.totalHours;
+      const remainingHours = CONSTANTS.ASSISTANT_MAX_HOURS - totalHours;
+
+      // ⭐ 情況1: 已完全額滿（已達8小時上限）
+      if (totalHours >= CONSTANTS.ASSISTANT_MAX_HOURS) {
+        console.log(
+          `⛔ [助手額滿] ${date} 已達工時上限 (${totalHours} >= ${CONSTANTS.ASSISTANT_MAX_HOURS})`
+        );
+        fullDates.push({
+          date,
+          weekdayDisplay,
+          remainingHours: 0,
+          totalHours,
+          maxHours: CONSTANTS.ASSISTANT_MAX_HOURS,
+          reason: "assistant_fully_booked",
+        });
+        continue;
+      }
+
+      // ⭐ 情況2: 剩餘時數不足
+      if (remainingHours < surgeryDuration) {
+        console.log(
+          `⛔ [助手額滿] ${date} 剩餘工時不足 (${remainingHours} < ${surgeryDuration})`
+        );
+        fullDates.push({
+          date,
+          weekdayDisplay,
+          remainingHours,
+          totalHours,
+          maxHours: CONSTANTS.ASSISTANT_MAX_HOURS,
+          reason: "assistant_insufficient_hours",
+        });
+        continue;
+      }
+
+      // ⭐ 情況3: 加入後會超過8小時上限
+      const totalAfterAdding = totalHours + surgeryDuration;
+      if (totalAfterAdding > CONSTANTS.ASSISTANT_MAX_HOURS) {
+        console.log(
+          `⛔ [助手額滿] ${date} 加入後會超限 (${totalHours}+${surgeryDuration}=${totalAfterAdding} > ${CONSTANTS.ASSISTANT_MAX_HOURS})`
+        );
+        fullDates.push({
+          date,
+          weekdayDisplay,
+          remainingHours,
+          totalHours,
+          maxHours: CONSTANTS.ASSISTANT_MAX_HOURS,
+          reason: "assistant_would_exceed_capacity",
+        });
+        continue;
+      }
+
+      // 5. 可用日期
       availableDates.push({
         ...candidate,
         assistantInfo: {
@@ -303,14 +443,22 @@ async function checkAssistantAvailability(
           remainingHours,
           surgeryCount: workload.surgeryCount,
           isOnDutyYesterday: false,
+          maxHours: CONSTANTS.ASSISTANT_MAX_HOURS,
         },
       });
     }
 
+    console.log(`\n📊 [助手總結] 可用日期: ${availableDates.length} 個`);
+    console.log(`📊 [助手總結] 額滿日期: ${fullDates.length} 個`);
     if (fullDates.length > 0) {
       console.log(
-        "⛔ 助手醫師額滿日期:",
-        fullDates.map((d) => `${d.date} (${d.remainingHours}hr)`)
+        "⛔ 助手額滿日期明細:",
+        fullDates.map(
+          (d) =>
+            `${d.date} (已排${d.totalHours || 0}/${d.maxHours || 8}hr, ${
+              d.reason
+            })`
+        )
       );
     }
 
