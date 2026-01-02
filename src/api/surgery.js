@@ -413,42 +413,67 @@ router.get("/monthly", requireAuth, async (req, res) => {
       params.push(employee_id);
     } else if (role === "N") {
       sql += ` 
-        AND (
-          -- 情況1: 固定護理師
-          (
-            sct.room_id IN (
-              SELECT surgery_room_id 
-              FROM nurse_schedule 
-              WHERE employee_id = $3
+          AND (
+            -- 情況1: 固定護理師
+            (
+              sct.room_id IN (
+                SELECT surgery_room_id 
+                FROM nurse_schedule 
+                WHERE employee_id = $3
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM nurse_dayoff nd
+                WHERE nd.id = $3 
+                AND nd.day_off = (
+                  CASE EXTRACT(DOW FROM s.surgery_date)
+                    WHEN 0 THEN 7  -- 週日
+                    ELSE EXTRACT(DOW FROM s.surgery_date)::integer
+                  END
+                )
+              )
+              -- 檢查手術時間是否在護理師的值班時段內
+              AND EXISTS (
+                SELECT 1 FROM nurse_schedule ns
+                WHERE ns.employee_id = $3
+                AND ns.surgery_room_id = sct.room_id
+                AND (
+                  -- 早班 (08:00-16:00)
+                  (ns.scheduling_time = '早班' AND EXTRACT(HOUR FROM sct.start_time) >= 8 AND EXTRACT(HOUR FROM sct.start_time) < 16)
+                  OR
+                  -- 晚班 (16:00-24:00)
+                  (ns.scheduling_time = '晚班' AND EXTRACT(HOUR FROM sct.start_time) >= 16 AND EXTRACT(HOUR FROM sct.start_time) < 24)
+                  OR
+                  -- 大夜班 (00:00-08:00)
+                  (ns.scheduling_time = '大夜班' AND EXTRACT(HOUR FROM sct.start_time) >= 0 AND EXTRACT(HOUR FROM sct.start_time) < 8)
+                )
+              )
             )
-            AND NOT EXISTS (
-              SELECT 1 FROM nurse_dayoff nd
-              WHERE nd.id = $3 
-              AND nd.day_off = (
-                CASE EXTRACT(DOW FROM s.surgery_date)
-                  WHEN 0 THEN 7  -- 週日
-                  ELSE EXTRACT(DOW FROM s.surgery_date)::integer
-                END
+            OR
+            -- 情況2: 流動護理師
+            EXISTS (
+              SELECT 1 FROM nurse_float nf
+              JOIN nurse_schedule ns ON nf.employee_id = ns.employee_id
+              WHERE nf.employee_id = $3
+              AND (
+                (EXTRACT(DOW FROM s.surgery_date) = 0 AND nf.sun = sct.room_id) OR
+                (EXTRACT(DOW FROM s.surgery_date) = 1 AND nf.mon = sct.room_id) OR
+                (EXTRACT(DOW FROM s.surgery_date) = 2 AND nf.tues = sct.room_id) OR
+                (EXTRACT(DOW FROM s.surgery_date) = 3 AND nf.wed = sct.room_id) OR
+                (EXTRACT(DOW FROM s.surgery_date) = 4 AND nf.thu = sct.room_id) OR
+                (EXTRACT(DOW FROM s.surgery_date) = 5 AND nf.fri = sct.room_id) OR
+                (EXTRACT(DOW FROM s.surgery_date) = 6 AND nf.sat = sct.room_id)
+              )
+              -- 流動護理師也要檢查值班時段
+              AND (
+                (ns.scheduling_time = '早班' AND EXTRACT(HOUR FROM sct.start_time) >= 8 AND EXTRACT(HOUR FROM sct.start_time) < 16)
+                OR
+                (ns.scheduling_time = '晚班' AND EXTRACT(HOUR FROM sct.start_time) >= 16 AND EXTRACT(HOUR FROM sct.start_time) < 24)
+                OR
+                (ns.scheduling_time = '大夜班' AND EXTRACT(HOUR FROM sct.start_time) >= 0 AND EXTRACT(HOUR FROM sct.start_time) < 8)
               )
             )
           )
-          OR
-          -- 情況2: 流動護理師
-          EXISTS (
-            SELECT 1 FROM nurse_float nf
-            WHERE nf.employee_id = $3
-            AND (
-              (EXTRACT(DOW FROM s.surgery_date) = 0 AND nf.sun = sct.room_id) OR
-              (EXTRACT(DOW FROM s.surgery_date) = 1 AND nf.mon = sct.room_id) OR
-              (EXTRACT(DOW FROM s.surgery_date) = 2 AND nf.tues = sct.room_id) OR
-              (EXTRACT(DOW FROM s.surgery_date) = 3 AND nf.wed = sct.room_id) OR
-              (EXTRACT(DOW FROM s.surgery_date) = 4 AND nf.thu = sct.room_id) OR
-              (EXTRACT(DOW FROM s.surgery_date) = 5 AND nf.fri = sct.room_id) OR
-              (EXTRACT(DOW FROM s.surgery_date) = 6 AND nf.sat = sct.room_id)
-            )
-          )
-        )
-      `;
+        `;
       params.push(employee_id);
     }
 
